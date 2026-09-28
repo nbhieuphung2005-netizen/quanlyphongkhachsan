@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 import pandas as pd
 import streamlit as st
-
+st.image("VT.jpg")
 st.set_page_config(page_title="Quản Lý Khách Sạn", layout="wide")
 
 CSV_FILE = "history_hotel.csv"
