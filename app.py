@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 import pandas as pd
 import streamlit as st
-st.image("VT.jpg")
+st.image("123.jpg")
 # ---------------------------------------------------------
 # CẤU HÌNH TRANG WEB STREAMLIT
 # ---------------------------------------------------------
