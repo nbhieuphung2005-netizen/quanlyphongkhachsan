@@ -54,18 +54,18 @@ if page == "🏨 Dat Phong":
         room_name = st.selectbox("Chọn phòng:", list(hotel_rooms[category].keys()))
         nights = st.number_input("Số đêm ở:", min_value=1, step=1, value=1)
 
-        if st.button("➕ Thêm vào phiếu đặt"):
+     if st.button("➕ Thêm vào phiếu đặt"):
             price = hotel_rooms[category][room_name]
             
-            st.session_state.booking_dict[room_name] = {
+        st.session_state.booking_dict[room_name] = {
                 "Khách hàng": customer_name,
                 "Tên phòng": room_name,
                 "Giá / đêm": price,
                 "Số đêm": nights,
                 "Thành tiền": price * nights,
-            }
-            st.success(f"Đã thêm {room_name} vào danh sách!")
-            st.rerun()
+        }
+         st.success(f"Đã thêm {room_name} vào danh sách!")
+         st.rerun()
 
     with col2:
         st.subheader("Danh sách phòng đang chọn")
