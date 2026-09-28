@@ -3,6 +3,10 @@ from datetime import datetime, date, timedelta
 import hashlib
 import pandas as pd
 import streamlit as st
+
+# MySQL/Aiven
+# Cài đặt: pip install pymysql sqlalchemy cryptography
+
 st.image("123.jpg")
 # =========================================================
 # KHÁCH SẠN 4 SAO - HỆ THỐNG QUẢN LÝ
@@ -17,20 +21,31 @@ st.set_page_config(
 )
 
 # -------------------- CẤU HÌNH --------------------
-DATA_DIR = "hotel_data"
-os.makedirs(DATA_DIR, exist_ok=True)
-
-FILES = {
-    "rooms": os.path.join(DATA_DIR, "rooms.csv"),
-    "guests": os.path.join(DATA_DIR, "guests.csv"),
-    "bookings": os.path.join(DATA_DIR, "bookings.csv"),
-    "payments": os.path.join(DATA_DIR, "payments.csv"),
-    "services": os.path.join(DATA_DIR, "services.csv"),
-    "maintenance": os.path.join(DATA_DIR, "maintenance.csv"),
-    "housekeeping": os.path.join(DATA_DIR, "housekeeping.csv"),
-    "staff": os.path.join(DATA_DIR, "staff.csv"),
-    "logs": os.path.join(DATA_DIR, "activity_logs.csv"),
+# Dữ liệu chính được lưu trên Aiven MySQL.
+# Thông tin đăng nhập KHÔNG ghi trong app.py, mà đặt trong
+# .streamlit/secrets.toml hoặc Streamlit Cloud Secrets.
+DB_TABLES = {
+    "rooms": "rooms",
+    "guests": "guests",
+    "bookings": "bookings",
+    "payments": "payments",
+    "services": "services_used",
+    "maintenance": "maintenance",
+    "housekeeping": "housekeeping",
+    "staff": "staff",
+    "logs": "activity_logs",
 }
+
+@st.cache_resource
+def get_db_connection():
+    try:
+        return st.connection("aiven_mysql", type="sql")
+    except Exception as e:
+        st.error("Không thể kết nối Aiven MySQL. Hãy kiểm tra .streamlit/secrets.toml và requirements.txt.")
+        st.exception(e)
+        st.stop()
+
+DB = get_db_connection()
 
 HOTEL_NAME = "GRAND RIVER HOTEL"
 HOTEL_STAR = "4★"
@@ -90,22 +105,36 @@ def password_hash(password):
 
 
 def save_df(key):
-    st.session_state[key].to_csv(FILES[key], index=False, encoding="utf-8-sig")
+    """Ghi toàn bộ DataFrame hiện tại lên bảng MySQL tương ứng."""
+    table = DB_TABLES[key]
+    df = st.session_state[key].copy()
+    try:
+        # replace giúp app hiện tại tiếp tục hoạt động mà không cần sửa
+        # toàn bộ phần CRUD đang dùng st.session_state.
+        df.to_sql(table, DB.engine, if_exists="replace", index=False)
+    except Exception as e:
+        st.error(f"Không thể lưu dữ liệu vào MySQL (bảng {table}).")
+        st.exception(e)
 
 
 def load_df(key, columns, default_rows=None):
-    if os.path.exists(FILES[key]):
+    """Đọc dữ liệu từ MySQL; nếu bảng chưa tồn tại thì tạo từ dữ liệu mặc định."""
+    table = DB_TABLES[key]
+    try:
+        df = DB.query(f"SELECT * FROM `{table}`", ttl=0)
+        for c in columns:
+            if c not in df.columns:
+                df[c] = ""
+        return df[columns]
+    except Exception:
+        df = pd.DataFrame(default_rows or [], columns=columns)
         try:
-            df = pd.read_csv(FILES[key])
-            for c in columns:
-                if c not in df.columns:
-                    df[c] = ""
-            return df[columns]
-        except Exception:
-            pass
-    df = pd.DataFrame(default_rows or [], columns=columns)
-    df.to_csv(FILES[key], index=False, encoding="utf-8-sig")
-    return df
+            df.to_sql(table, DB.engine, if_exists="replace", index=False)
+        except Exception as e:
+            st.error(f"Không thể tạo bảng MySQL `{table}`.")
+            st.exception(e)
+            st.stop()
+        return df
 
 
 def log_action(action, detail, user=None):
