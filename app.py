@@ -30,10 +30,10 @@ st.set_page_config(
 #
 # KHÔNG dùng defaultdb hoặc port 18185 nữa.
 
-DB_HOST = "DAN_HOST_AIVEN_VAO_DAY"
-DB_PORT = 14483
+DB_HOST = "mysql-11e928b1-nbhieuphung2005-1a49.h.aivencloud.com"
+DB_PORT = 18185
 DB_USER = "avnadmin"
-DB_PASSWORD = "DAN_PASSWORD_AIVEN_VAO_DAY"
+DB_PASSWORD = "123456"
 DB_NAME = "hotel_management"
 
 
