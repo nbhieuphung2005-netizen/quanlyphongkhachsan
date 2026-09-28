@@ -3,7 +3,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import URL
+import pymysql
 
 # ---------------------------------------------------------
 # CẤU HÌNH TRANG WEB STREAMLIT
@@ -23,43 +23,41 @@ if os.path.exists("123.jpg"):
 # ---------------------------------------------------------
 @st.cache_resource
 def get_db_engine():
-    # Ưu tiên lấy từ Streamlit Secrets.
-    # Nếu chưa có host/port thì dùng đúng thông tin Aiven của bạn.
     try:
         cfg = st.secrets["aiven_mysql"]
-        host = cfg.get(
-            "host",
-            "mysql-11e928b1-nbhieuphung2005-1a49.h.aivencloud.com"
-        )
+        host = cfg.get("host", "mysql-11e928b1-nbhieuphung2005-1a49.h.aivencloud.com")
         port = int(cfg.get("port", 18185))
         username = cfg.get("username", "avnadmin")
         password = cfg["password"]
         database = cfg.get("database", "defaultdb")
-    except Exception:
-        st.error(
-            "Chưa cấu hình mật khẩu Aiven. "
-            "Vào Streamlit Cloud → Settings → Secrets và thêm [aiven_mysql]."
-        )
+    except Exception as e:
+        st.error("Không đọc được cấu hình Aiven MySQL.")
+        st.code(str(e))
         st.stop()
 
-    # URL.create giúp mật khẩu có ký tự đặc biệt (#, @, :, /...) vẫn hoạt động.
-    db_url = URL.create(
-        drivername="mysql+pymysql",
-        username=username,
-        password=password,
-        host=host,
-        port=port,
-        database=database,
-    )
+    # PyMySQL mặc định encode password dạng str bằng latin-1.
+    # Dùng bytes UTF-8 để tránh lỗi với mật khẩu có ký tự Unicode.
+    password_bytes = password.encode("utf-8")
 
-    # Aiven đang yêu cầu SSL.
+    def connect_aiven():
+        return pymysql.connect(
+            host=host,
+            port=port,
+            user=username,
+            password=password_bytes,
+            database=database,
+            charset="utf8mb4",
+            ssl={},
+            autocommit=True,
+            connect_timeout=15,
+        )
+
     return create_engine(
-        db_url,
-        connect_args={"ssl": {}},
+        "mysql+pymysql://",
+        creator=connect_aiven,
         pool_pre_ping=True,
         pool_recycle=1800,
     )
-
 
 DB = get_db_engine()
 
