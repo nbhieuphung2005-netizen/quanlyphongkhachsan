@@ -33,7 +33,7 @@ st.set_page_config(
 DB_HOST = "mysql-11e928b1-nbhieuphung2005-1a49.h.aivencloud.com"
 DB_PORT = 18185
 DB_USER = "avnadmin"
-DB_PASSWORD = "AVNS_uSZGm9saxwxnPj4HxuM"
+DB_PASSWORD = "AVNS_dqj0WOlOyaaUQCY-wGC"
 DB_NAME = "hotel_management"
 
 
