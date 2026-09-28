@@ -1,611 +1,1147 @@
 import os
 from datetime import datetime
+
 import pandas as pd
+import pymysql
 import streamlit as st
 from sqlalchemy import create_engine, text
-import pymysql
 
-# ---------------------------------------------------------
-# CẤU HÌNH TRANG WEB STREAMLIT
-# ---------------------------------------------------------
+
+# =========================================================
+# CẤU HÌNH WEBSITE
+# =========================================================
+
 st.set_page_config(
-    page_title="Hệ Thống Quản Lý Khách Sạn",
+    page_title="Khách sạn 4 sao",
     page_icon="🏨",
     layout="wide"
 )
 
-# Ảnh khách sạn
-if os.path.exists("123.jpg"):
-    st.image("123.jpg")
 
-# ---------------------------------------------------------
-# KẾT NỐI AIVEN MYSQL
-# ---------------------------------------------------------
+# =========================================================
+# THÔNG TIN MYSQL AIVEN
+# =========================================================
+# Lấy chính xác Host và Password trong Aiven.
+# User / Port / Database theo thông tin bạn đưa:
+#
+# User     : avnadmin
+# Port     : 14483
+# Database : hotel_management
+#
+# KHÔNG dùng defaultdb hoặc port 18185 nữa.
+
+DB_HOST = "DAN_HOST_AIVEN_VAO_DAY"
+DB_PORT = 14483
+DB_USER = "avnadmin"
+DB_PASSWORD = "DAN_PASSWORD_AIVEN_VAO_DAY"
+DB_NAME = "hotel_management"
+
+
+# =========================================================
+# KẾT NỐI MYSQL
+# =========================================================
+
 @st.cache_resource
-def get_db_engine():
+def get_database():
+
     try:
-        cfg = st.secrets["aiven_mysql"]
-        host = cfg.get("host", "mysql-11e928b1-nbhieuphung2005-1a49.h.aivencloud.com")
-        port = int(cfg.get("port", 18185))
-        username = cfg.get("username", "avnadmin")
-        password = cfg["password"]
-        database = cfg.get("database", "defaultdb")
-    except Exception as e:
-        st.error("Không đọc được cấu hình Aiven MySQL.")
-        st.code(str(e))
-        st.stop()
 
-    # PyMySQL mặc định encode password dạng str bằng latin-1.
-    # Dùng bytes UTF-8 để tránh lỗi với mật khẩu có ký tự Unicode.
-    password_bytes = password.encode("utf-8")
+        connection = pymysql.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
 
-    def connect_aiven():
-        return pymysql.connect(
-            host=host,
-            port=port,
-            user=username,
-            password=password_bytes,
-            database=database,
             charset="utf8mb4",
-            ssl={},
+
             autocommit=True,
-            connect_timeout=15,
+
+            ssl={},
+
+            connect_timeout=20
         )
 
-    return create_engine(
-        "mysql+pymysql://",
-        creator=connect_aiven,
-        pool_pre_ping=True,
-        pool_recycle=1800,
-    )
+        connection.close()
 
-DB = get_db_engine()
+        engine = create_engine(
+            "mysql+pymysql://",
+            creator=lambda: pymysql.connect(
+                host=DB_HOST,
+                port=DB_PORT,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                database=DB_NAME,
+                charset="utf8mb4",
+                autocommit=True,
+                ssl={},
+                connect_timeout=20
+            ),
+            pool_pre_ping=True,
+            pool_recycle=1800
+        )
 
-# ---------------------------------------------------------
-# TẠO BẢNG MYSQL
-# ---------------------------------------------------------
-def init_database():
+        return engine
+
+    except Exception as e:
+
+        st.error("❌ Không thể kết nối MySQL Aiven")
+
+        st.code(str(e))
+
+        st.stop()
+
+
+DB = get_database()
+
+
+# =========================================================
+# KIỂM TRA DATABASE
+# =========================================================
+
+def check_database():
+
+    try:
+
+        with DB.connect() as conn:
+
+            result = conn.execute(
+                text("SELECT DATABASE()")
+            )
+
+            database_name = result.scalar()
+
+        return database_name
+
+    except Exception as e:
+
+        st.error("❌ Không kiểm tra được database.")
+
+        st.code(str(e))
+
+        st.stop()
+
+
+CURRENT_DATABASE = check_database()
+
+
+# =========================================================
+# TẠO BẢNG
+# =========================================================
+
+def create_tables():
+
     with DB.begin() as conn:
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS booking_history (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                thoi_gian DATETIME NOT NULL,
-                khach_hang VARCHAR(255) NOT NULL,
-                ten_phong VARCHAR(255) NOT NULL,
-                so_dem INT NOT NULL,
-                thanh_tien DECIMAL(15,2) NOT NULL
-            )
-        """))
 
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS cleaning_status (
-                phong VARCHAR(255) PRIMARY KEY,
-                hang_phong VARCHAR(255) NOT NULL,
-                trang_thai VARCHAR(100) NOT NULL,
-                nhan_vien VARCHAR(255) NOT NULL,
-                cap_nhat_cuoi DATETIME NOT NULL
-            )
-        """))
+        # -----------------------------------------
+        # BẢNG ĐẶT PHÒNG
+        # -----------------------------------------
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS booking_history (
+
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+                    thoi_gian DATETIME NOT NULL,
+
+                    khach_hang VARCHAR(255) NOT NULL,
+
+                    ten_phong VARCHAR(255) NOT NULL,
+
+                    so_dem INT NOT NULL,
+
+                    thanh_tien DECIMAL(15,2) NOT NULL
+
+                )
+            """)
+        )
+
+
+        # -----------------------------------------
+        # BẢNG TRẠNG THÁI PHÒNG
+        # -----------------------------------------
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS cleaning_status (
+
+                    phong VARCHAR(255) PRIMARY KEY,
+
+                    hang_phong VARCHAR(255) NOT NULL,
+
+                    trang_thai VARCHAR(100) NOT NULL,
+
+                    nhan_vien VARCHAR(255) NOT NULL,
+
+                    cap_nhat_cuoi DATETIME NOT NULL
+
+                )
+            """)
+        )
 
 
 try:
-    init_database()
+
+    create_tables()
+
 except Exception as e:
-    st.error("Không thể kết nối hoặc tạo bảng MySQL Aiven.")
+
+    st.error("❌ Kết nối được MySQL nhưng không tạo được bảng.")
+
     st.code(str(e))
+
     st.stop()
 
-# ---------------------------------------------------------
-# DANH MỤC PHÒNG & BẢNG GIÁ
-# ---------------------------------------------------------
+
+# =========================================================
+# THÔNG TIN KHÁCH SẠN
+# =========================================================
+
 HOTEL_ROOMS = {
+
     "Phòng Thường": {
+
         "P.101 (Đơn)": 300000,
+
         "P.102 (Đơn)": 300000,
+
         "P.201 (Đôi)": 450000,
-        "P.202 (Đôi)": 450000,
+
+        "P.202 (Đôi)": 450000
+
     },
+
     "Phòng VIP": {
+
         "P.301 (VIP Đơn)": 600000,
+
         "P.302 (VIP Đôi)": 800000,
-        "P.401 (President)": 1500000,
-    },
+
+        "P.401 (President)": 1500000
+
+    }
+
 }
 
+
 STATUS_OPTIONS = [
+
     "Trống - Sạch",
+
     "Đang ở",
+
     "Cần dọn",
+
     "Đang dọn",
+
     "Bảo trì"
+
 ]
+
 
 STAFF_LIST = [
+
     "Nguyễn Văn A",
+
     "Trần Thị B",
+
     "Lê Văn C",
+
     "Chưa phân công"
+
 ]
 
-# ---------------------------------------------------------
-# HÀM LÀM VIỆC VỚI MYSQL
-# ---------------------------------------------------------
-def load_booking_history():
-    try:
-        with DB.connect() as conn:
-            df = pd.read_sql(
-                text("""
-                    SELECT
-                        thoi_gian AS `Thời gian`,
-                        khach_hang AS `Khách hàng`,
-                        ten_phong AS `Tên phòng`,
-                        so_dem AS `Số đêm`,
-                        thanh_tien AS `Thành tiền`
-                    FROM booking_history
-                    ORDER BY thoi_gian DESC, id DESC
-                """),
-                conn
-            )
-        return df.to_dict(orient="records")
-    except Exception as e:
-        st.error(f"Lỗi đọc lịch sử đặt phòng từ MySQL: {e}")
-        return []
 
+# =========================================================
+# TẠO PHÒNG MẶC ĐỊNH
+# =========================================================
 
-def create_default_cleaning_data():
-    default_data = []
+def initialize_rooms():
 
-    for cat, rooms in HOTEL_ROOMS.items():
-        for room_name in rooms.keys():
-            default_data.append({
-                "Phòng": room_name,
-                "Hạng phòng": cat,
-                "Trạng thái": "Trống - Sạch",
-                "Nhân viên": "Chưa phân công",
-                "Cập nhật cuối": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
-
-    return pd.DataFrame(default_data)
-
-
-def load_cleaning_status():
-    try:
-        with DB.connect() as conn:
-            df = pd.read_sql(
-                text("""
-                    SELECT
-                        phong AS `Phòng`,
-                        hang_phong AS `Hạng phòng`,
-                        trang_thai AS `Trạng thái`,
-                        nhan_vien AS `Nhân viên`,
-                        cap_nhat_cuoi AS `Cập nhật cuối`
-                    FROM cleaning_status
-                    ORDER BY phong
-                """),
-                conn
-            )
-
-        # Nếu bảng chưa có dữ liệu thì tạo dữ liệu phòng mặc định.
-        if df.empty:
-            df = create_default_cleaning_data()
-            save_cleaning_status(df)
-
-        return df
-
-    except Exception as e:
-        st.error(f"Lỗi đọc trạng thái phòng từ MySQL: {e}")
-        return create_default_cleaning_data()
-
-
-def save_cleaning_status(df):
     with DB.begin() as conn:
-        # Không dùng to_sql(replace) để tránh mất cấu trúc bảng.
-        for _, row in df.iterrows():
-            conn.execute(
-                text("""
-                    INSERT INTO cleaning_status
-                    (phong, hang_phong, trang_thai, nhan_vien, cap_nhat_cuoi)
-                    VALUES
-                    (:phong, :hang_phong, :trang_thai, :nhan_vien, :cap_nhat_cuoi)
-                    ON DUPLICATE KEY UPDATE
-                        hang_phong = VALUES(hang_phong),
-                        trang_thai = VALUES(trang_thai),
-                        nhan_vien = VALUES(nhan_vien),
-                        cap_nhat_cuoi = VALUES(cap_nhat_cuoi)
-                """),
-                {
-                    "phong": row["Phòng"],
-                    "hang_phong": row["Hạng phòng"],
-                    "trang_thai": row["Trạng thái"],
-                    "nhan_vien": row["Nhân viên"],
-                    "cap_nhat_cuoi": pd.to_datetime(row["Cập nhật cuối"]).to_pydatetime(),
-                }
-            )
+
+        for category, rooms in HOTEL_ROOMS.items():
+
+            for room, price in rooms.items():
+
+                conn.execute(
+
+                    text("""
+                        INSERT IGNORE INTO cleaning_status
+                        (
+                            phong,
+                            hang_phong,
+                            trang_thai,
+                            nhan_vien,
+                            cap_nhat_cuoi
+                        )
+
+                        VALUES
+                        (
+                            :phong,
+                            :hang_phong,
+                            'Trống - Sạch',
+                            'Chưa phân công',
+                            :cap_nhat
+                        )
+                    """),
+
+                    {
+                        "phong": room,
+                        "hang_phong": category,
+                        "cap_nhat": datetime.now()
+                    }
+
+                )
 
 
-def insert_booking(row, now_value):
+initialize_rooms()
+
+
+# =========================================================
+# ĐỌC LỊCH SỬ ĐẶT PHÒNG
+# =========================================================
+
+def get_booking_history():
+
+    with DB.connect() as conn:
+
+        return pd.read_sql(
+
+            text("""
+                SELECT
+
+                    id AS `ID`,
+
+                    thoi_gian AS `Thời gian`,
+
+                    khach_hang AS `Khách hàng`,
+
+                    ten_phong AS `Tên phòng`,
+
+                    so_dem AS `Số đêm`,
+
+                    thanh_tien AS `Thành tiền`
+
+                FROM booking_history
+
+                ORDER BY thoi_gian DESC, id DESC
+            """),
+
+            conn
+
+        )
+
+
+# =========================================================
+# ĐỌC TRẠNG THÁI PHÒNG
+# =========================================================
+
+def get_cleaning_status():
+
+    with DB.connect() as conn:
+
+        return pd.read_sql(
+
+            text("""
+                SELECT
+
+                    phong AS `Phòng`,
+
+                    hang_phong AS `Hạng phòng`,
+
+                    trang_thai AS `Trạng thái`,
+
+                    nhan_vien AS `Nhân viên`,
+
+                    cap_nhat_cuoi AS `Cập nhật cuối`
+
+                FROM cleaning_status
+
+                ORDER BY phong
+            """),
+
+            conn
+
+        )
+
+
+# =========================================================
+# LƯU ĐẶT PHÒNG
+# =========================================================
+
+def save_booking(
+    customer,
+    room,
+    nights,
+    total
+):
+
+    now = datetime.now()
+
     with DB.begin() as conn:
+
+        # Lưu hóa đơn
+
         conn.execute(
+
             text("""
                 INSERT INTO booking_history
-                (thoi_gian, khach_hang, ten_phong, so_dem, thanh_tien)
+                (
+                    thoi_gian,
+                    khach_hang,
+                    ten_phong,
+                    so_dem,
+                    thanh_tien
+                )
+
                 VALUES
-                (:thoi_gian, :khach_hang, :ten_phong, :so_dem, :thanh_tien)
+                (
+                    :time,
+                    :customer,
+                    :room,
+                    :nights,
+                    :total
+                )
             """),
+
             {
-                "thoi_gian": now_value,
-                "khach_hang": row["Khách hàng"],
-                "ten_phong": row["Tên phòng"],
-                "so_dem": int(row["Số đêm"]),
-                "thanh_tien": float(row["Thành tiền"]),
+                "time": now,
+                "customer": customer,
+                "room": room,
+                "nights": int(nights),
+                "total": float(total)
             }
+
         )
+
+
+        # Chuyển phòng thành đang ở
 
         conn.execute(
+
             text("""
                 UPDATE cleaning_status
-                SET trang_thai = 'Đang ở',
-                    cap_nhat_cuoi = :cap_nhat
-                WHERE phong = :phong
+
+                SET
+
+                    trang_thai = 'Đang ở',
+
+                    cap_nhat_cuoi = :time
+
+                WHERE phong = :room
             """),
+
             {
-                "cap_nhat": now_value,
-                "phong": row["Tên phòng"],
+                "time": now,
+                "room": room
             }
+
         )
 
 
-def update_room_status(room_name, new_status, staff):
-    now_value = datetime.now()
+# =========================================================
+# CẬP NHẬT PHÒNG
+# =========================================================
+
+def update_room(
+    room,
+    status,
+    staff
+):
 
     with DB.begin() as conn:
+
         conn.execute(
+
             text("""
                 UPDATE cleaning_status
-                SET trang_thai = :trang_thai,
-                    nhan_vien = :nhan_vien,
-                    cap_nhat_cuoi = :cap_nhat
-                WHERE phong = :phong
+
+                SET
+
+                    trang_thai = :status,
+
+                    nhan_vien = :staff,
+
+                    cap_nhat_cuoi = :time
+
+                WHERE phong = :room
             """),
+
             {
-                "trang_thai": new_status,
-                "nhan_vien": staff,
-                "cap_nhat": now_value,
-                "phong": room_name,
+                "status": status,
+                "staff": staff,
+                "time": datetime.now(),
+                "room": room
             }
+
         )
 
-# ---------------------------------------------------------
-# KHỞI TẠO SESSION STATE
-# ---------------------------------------------------------
-if "booking_dict" not in st.session_state:
-    st.session_state.booking_dict = {}
 
-if "booking_history" not in st.session_state:
-    st.session_state.booking_history = load_booking_history()
+# =========================================================
+# SESSION
+# =========================================================
 
-if "cleaning_status" not in st.session_state:
-    st.session_state.cleaning_status = load_cleaning_status()
+if "booking" not in st.session_state:
 
-if "admin_logged_in" not in st.session_state:
-    st.session_state.admin_logged_in = False
+    st.session_state.booking = {}
 
-# ---------------------------------------------------------
-# THANH ĐIỀU HƯỚNG SIDEBAR
-# ---------------------------------------------------------
-page = st.sidebar.radio(
-    "📋 Chọn trang hệ thống",
-    [
-        "🛎️ Đặt & Thường Trực",
-        "🧹 Theo Dõi Dọn Phòng",
-        "🔑 Admin & Báo Cáo"
-    ]
+
+if "admin_login" not in st.session_state:
+
+    st.session_state.admin_login = False
+
+
+# =========================================================
+# ẢNH KHÁCH SẠN
+# =========================================================
+
+if os.path.exists("123.jpg"):
+
+    st.image(
+        "123.jpg",
+        use_container_width=True
+    )
+
+
+# =========================================================
+# SIDEBAR
+# =========================================================
+
+st.sidebar.title("🏨 KHÁCH SẠN 4 SAO")
+
+st.sidebar.success(
+    f"🟢 MySQL: {CURRENT_DATABASE}"
 )
 
-# ---------------------------------------------------------
-# TRANG 1: LỄ TÂN & ĐẶT PHÒNG
-# ---------------------------------------------------------
-if page == "🛎️ Đặt & Thường Trực":
-    st.title("🛎️ Quản Lý Đặt Phòng & Lễ Tân")
-    st.caption("Ghi nhận thông tin đặt phòng và dịch vụ cho khách hàng")
 
-    col1, col2 = st.columns([1, 1.3])
+page = st.sidebar.radio(
+
+    "📋 Chức năng",
+
+    [
+
+        "🛎️ Đặt phòng",
+
+        "🧹 Quản lý phòng",
+
+        "🔑 Admin & Doanh thu"
+
+    ]
+
+)
+
+
+# =========================================================
+# TRANG ĐẶT PHÒNG
+# =========================================================
+
+if page == "🛎️ Đặt phòng":
+
+    st.title(
+        "🛎️ Quản Lý Đặt Phòng"
+    )
+
+    st.caption(
+        "Hệ thống quản lý khách sạn 4 sao"
+    )
+
+
+    col1, col2 = st.columns(
+        [1, 1.5]
+    )
+
+
+    # -----------------------------------------
+    # CHỌN PHÒNG
+    # -----------------------------------------
 
     with col1:
-        st.subheader("Chọn Phòng & Khách Hàng")
 
-        customer_name = st.text_input(
-            "👤 Tên khách hàng:",
-            value="Khách lẻ"
+        st.subheader(
+            "👤 Thông tin khách hàng"
         )
+
+
+        customer = st.text_input(
+
+            "Tên khách hàng",
+
+            value="Khách lẻ"
+
+        )
+
 
         category = st.selectbox(
-            "Chọn hạng phòng:",
+
+            "Hạng phòng",
+
             list(HOTEL_ROOMS.keys())
+
         )
 
-        room_name = st.selectbox(
-            "Chọn phòng:",
-            list(HOTEL_ROOMS[category].keys())
-        )
 
-        nights = st.number_input(
-            "Số đêm ở:",
-            min_value=1,
-            step=1,
-            value=1
-        )
+        room = st.selectbox(
 
-        if st.button("➕ Thêm vào phiếu đặt"):
-            price = HOTEL_ROOMS[category][room_name]
+            "Phòng",
 
-            st.session_state.booking_dict[room_name] = {
-                "Khách hàng": customer_name,
-                "Tên phòng": room_name,
-                "Giá / đêm": price,
-                "Số đêm": nights,
-                "Thành tiền": price * nights,
-            }
-
-            st.success(f"Đã thêm {room_name} vào danh sách đặt!")
-            st.rerun()
-
-    with col2:
-        st.subheader("Phiếu đặt phòng hiện tại")
-
-        if st.session_state.booking_dict:
-            df_temp = pd.DataFrame.from_dict(
-                st.session_state.booking_dict,
-                orient="index"
+            list(
+                HOTEL_ROOMS[category].keys()
             )
 
-            st.table(
-                df_temp[
-                    [
-                        "Khách hàng",
-                        "Tên phòng",
-                        "Giá / đêm",
-                        "Số đêm",
-                        "Thành tiền"
-                    ]
+        )
+
+
+        price = HOTEL_ROOMS[
+            category
+        ][room]
+
+
+        st.info(
+            f"💰 {price:,.0f} VNĐ / đêm"
+        )
+
+
+        nights = st.number_input(
+
+            "Số đêm",
+
+            min_value=1,
+
+            value=1,
+
+            step=1
+
+        )
+
+
+        total = price * nights
+
+
+        st.write(
+            f"**Thành tiền:** {total:,.0f} VNĐ"
+        )
+
+
+        if st.button(
+            "➕ Thêm vào phiếu",
+            use_container_width=True
+        ):
+
+            st.session_state.booking[room] = {
+
+                "Khách hàng": customer,
+
+                "Tên phòng": room,
+
+                "Giá / đêm": price,
+
+                "Số đêm": nights,
+
+                "Thành tiền": total
+
+            }
+
+            st.success(
+                f"Đã thêm {room}"
+            )
+
+            st.rerun()
+
+
+    # -----------------------------------------
+    # PHIẾU
+    # -----------------------------------------
+
+    with col2:
+
+        st.subheader(
+            "🧾 Phiếu đặt phòng"
+        )
+
+
+        if st.session_state.booking:
+
+            df = pd.DataFrame(
+                st.session_state.booking.values()
+            )
+
+
+            st.dataframe(
+
+                df,
+
+                use_container_width=True,
+
+                hide_index=True
+
+            )
+
+
+            subtotal = df[
+                "Thành tiền"
+            ].sum()
+
+
+            discount = (
+
+                subtotal * 0.10
+
+                if subtotal >= 2000000
+
+                else 0
+
+            )
+
+
+            final_total = (
+                subtotal - discount
+            )
+
+
+            st.write(
+                f"**Tạm tính:** "
+                f"{subtotal:,.0f} VNĐ"
+            )
+
+
+            if discount:
+
+                st.write(
+                    f"**Giảm 10%:** "
+                    f"-{discount:,.0f} VNĐ"
+                )
+
+
+            st.metric(
+
+                "💰 Tổng thanh toán",
+
+                f"{final_total:,.0f} VNĐ"
+
+            )
+
+
+            col_pay, col_delete = st.columns(2)
+
+
+            with col_pay:
+
+                if st.button(
+
+                    "💳 Thanh toán",
+
+                    use_container_width=True
+
+                ):
+
+                    try:
+
+                        for item in st.session_state.booking.values():
+
+                            save_booking(
+
+                                item["Khách hàng"],
+
+                                item["Tên phòng"],
+
+                                item["Số đêm"],
+
+                                item["Thành tiền"]
+
+                            )
+
+
+                        st.session_state.booking = {}
+
+
+                        st.success(
+                            "✅ Đã lưu dữ liệu vào Aiven MySQL!"
+                        )
+
+                        st.rerun()
+
+
+                    except Exception as e:
+
+                        st.error(
+                            "❌ Lỗi khi lưu dữ liệu."
+                        )
+
+                        st.code(str(e))
+
+
+            with col_delete:
+
+                if st.button(
+
+                    "🗑️ Xóa phiếu",
+
+                    use_container_width=True
+
+                ):
+
+                    st.session_state.booking = {}
+
+                    st.rerun()
+
+
+        else:
+
+            st.info(
+                "Chưa có phòng trong phiếu."
+            )
+
+
+# =========================================================
+# TRANG QUẢN LÝ PHÒNG
+# =========================================================
+
+elif page == "🧹 Quản lý phòng":
+
+    st.title(
+        "🧹 Quản Lý Trạng Thái Phòng"
+    )
+
+
+    df = get_cleaning_status()
+
+
+    # -----------------------------------------
+    # THỐNG KÊ
+    # -----------------------------------------
+
+    c1, c2, c3, c4 = st.columns(4)
+
+
+    with c1:
+
+        st.metric(
+
+            "🟢 Phòng sạch",
+
+            len(
+                df[
+                    df["Trạng thái"]
+                    == "Trống - Sạch"
                 ]
             )
 
-            tam_tinh = df_temp["Thành tiền"].sum()
-            giam_gia = tam_tinh * 0.10 if tam_tinh >= 2000000 else 0
-            tong_thanh_toan = tam_tinh - giam_gia
+        )
 
-            st.write(f"**Tạm tính:** {tam_tinh:,.0f} VNĐ")
 
-            if giam_gia > 0:
-                st.write(
-                    f"**Giảm giá (10% cho HĐ >= 2M):** "
-                    f"-{giam_gia:,.0f} VNĐ"
-                )
+    with c2:
 
-            st.metric(
-                "Tổng thanh toán thực tế",
-                f"{tong_thanh_toan:,.0f} VNĐ"
+        st.metric(
+
+            "🧹 Cần dọn",
+
+            len(
+                df[
+                    df["Trạng thái"]
+                    == "Cần dọn"
+                ]
             )
 
-            btn_col1, btn_col2 = st.columns(2)
+        )
 
-            with btn_col1:
-                if st.button("💳 Thanh toán & Nhận phòng"):
-                    now_value = datetime.now()
 
-                    try:
-                        for row in st.session_state.booking_dict.values():
-                            insert_booking(row, now_value)
+    with c3:
 
-                        # Đọc lại dữ liệu từ MySQL để session luôn đồng bộ.
-                        st.session_state.booking_history = load_booking_history()
-                        st.session_state.cleaning_status = load_cleaning_status()
-                        st.session_state.booking_dict = {}
+        st.metric(
 
-                        st.success(
-                            "Thanh toán thành công! "
-                            "Dữ liệu đã được lưu vào Aiven MySQL."
-                        )
-                        st.rerun()
+            "⏳ Đang dọn",
 
-                    except Exception as e:
-                        st.error(f"Lỗi lưu dữ liệu vào Aiven MySQL: {e}")
+            len(
+                df[
+                    df["Trạng thái"]
+                    == "Đang dọn"
+                ]
+            )
 
-            with btn_col2:
-                if st.button("🗑️ Xóa phiếu"):
-                    st.session_state.booking_dict = {}
-                    st.rerun()
+        )
 
-        else:
-            st.info("Phiếu đặt phòng đang trống. Hãy chọn phòng bên trái.")
 
-# ---------------------------------------------------------
-# TRANG 2: THEO DÕI VỆ SINH PHÒNG
-# ---------------------------------------------------------
-elif page == "🧹 Theo Dõi Dọn Phòng":
-    st.title("🧹 Theo Dõi Trạng Thái Dọn Phòng")
-    st.caption("Cập nhật thời gian thực tình trạng vệ sinh buồng phòng")
+    with c4:
 
-    # Luôn đọc lại từ MySQL để dữ liệu mới nhất.
-    st.session_state.cleaning_status = load_cleaning_status()
-    df_clean = st.session_state.cleaning_status
+        st.metric(
 
-    m1, m2, m3, m4 = st.columns(4)
+            "🔴 Đang ở",
 
-    m1.metric(
-        "🟢 Sạch sẵn sàng",
-        len(df_clean[df_clean["Trạng thái"] == "Trống - Sạch"])
+            len(
+                df[
+                    df["Trạng thái"]
+                    == "Đang ở"
+                ]
+            )
+
+        )
+
+
+    st.divider()
+
+
+    left, right = st.columns(
+        [1, 1.5]
     )
 
-    m2.metric(
-        "🧹 Cần dọn",
-        len(df_clean[df_clean["Trạng thái"] == "Cần dọn"])
-    )
 
-    m3.metric(
-        "⏳ Đang dọn",
-        len(df_clean[df_clean["Trạng thái"] == "Đang dọn"])
-    )
+    with left:
 
-    m4.metric(
-        "🔴 Đang có khách",
-        len(df_clean[df_clean["Trạng thái"] == "Đang ở"])
-    )
+        st.subheader(
+            "🔄 Cập nhật phòng"
+        )
 
-    st.markdown("---")
-
-    col_update, col_view = st.columns([1, 1.3])
-
-    with col_update:
-        st.subheader("Cập nhật trạng thái")
 
         selected_room = st.selectbox(
-            "🛏️ Chọn phòng:",
-            df_clean["Phòng"].tolist()
+
+            "Chọn phòng",
+
+            df["Phòng"].tolist()
+
         )
 
-        current_row = df_clean[
-            df_clean["Phòng"] == selected_room
+
+        current = df[
+            df["Phòng"]
+            == selected_room
         ].iloc[0]
 
+
         st.info(
-            f"Hiện tại: **{current_row['Trạng thái']}** | "
-            f"NV: **{current_row['Nhân viên']}**"
+
+            f"Hiện tại: "
+            f"**{current['Trạng thái']}**\n\n"
+            f"Nhân viên: "
+            f"**{current['Nhân viên']}**"
+
         )
 
-        new_status = st.selectbox(
-            "🔄 Trạng thái mới:",
+
+        status = st.selectbox(
+
+            "Trạng thái mới",
+
             STATUS_OPTIONS,
-            index=STATUS_OPTIONS.index(current_row["Trạng thái"])
-        )
 
-        assigned_staff = st.selectbox(
-            "👤 Nhân viên phụ trách:",
-            STAFF_LIST,
-            index=(
-                STAFF_LIST.index(current_row["Nhân viên"])
-                if current_row["Nhân viên"] in STAFF_LIST
-                else 0
+            index=STATUS_OPTIONS.index(
+                current["Trạng thái"]
             )
+
         )
 
-        if st.button("💾 Lưu Cập Nhật"):
-            try:
-                update_room_status(
-                    selected_room,
-                    new_status,
-                    assigned_staff
+
+        staff = st.selectbox(
+
+            "Nhân viên",
+
+            STAFF_LIST,
+
+            index=(
+
+                STAFF_LIST.index(
+                    current["Nhân viên"]
                 )
 
-                st.session_state.cleaning_status = load_cleaning_status()
+                if current["Nhân viên"]
+                in STAFF_LIST
+
+                else 0
+
+            )
+
+        )
+
+
+        if st.button(
+
+            "💾 Lưu cập nhật",
+
+            use_container_width=True
+
+        ):
+
+            try:
+
+                update_room(
+
+                    selected_room,
+
+                    status,
+
+                    staff
+
+                )
 
                 st.success(
-                    f"Đã cập nhật phòng {selected_room} "
-                    "và lưu vào Aiven MySQL!"
+                    "✅ Đã lưu vào Aiven MySQL!"
                 )
 
                 st.rerun()
 
             except Exception as e:
-                st.error(f"Lỗi cập nhật MySQL: {e}")
 
-    with col_view:
-        st.subheader("📌 Danh sách trạng thái phòng")
+                st.error(
+                    "❌ Không thể cập nhật phòng."
+                )
 
-        def highlight_status(val):
-            color_map = {
-                "Trống - Sạch":
-                    "background-color: #d4edda; color: #155724;",
-                "Cần dọn":
-                    "background-color: #f8d7da; color: #721c24;",
-                "Đang dọn":
-                    "background-color: #fff3cd; color: #856404;",
-                "Đang ở":
-                    "background-color: #cce5ff; color: #004085;",
-                "Bảo trì":
-                    "background-color: #e2e3e5; color: #383d41;"
-            }
-            return color_map.get(val, "")
+                st.code(str(e))
 
-        st.dataframe(
-            df_clean.style.map(
-                highlight_status,
-                subset=["Trạng thái"]
-            ),
-            use_container_width=True,
-            hide_index=True
+
+    with right:
+
+        st.subheader(
+            "📋 Danh sách phòng"
         )
 
-# ---------------------------------------------------------
-# TRANG 3: ADMIN & BÁO CÁO DOANH THU
-# ---------------------------------------------------------
-elif page == "🔑 Admin & Báo Cáo":
-    st.title("🔑 Trang Quản Trị & Báo Cáo Doanh Thu")
 
-    if not st.session_state.admin_logged_in:
-        with st.form("admin_login_form"):
-            password = st.text_input(
-                "Nhập mật khẩu quản trị",
-                type="password"
-            )
+        st.dataframe(
 
-            if st.form_submit_button("🔑 Đăng nhập"):
-                if password == "123456":
-                    st.session_state.admin_logged_in = True
-                    st.rerun()
-                else:
-                    st.error("Mật khẩu không chính xác!")
+            get_cleaning_status(),
+
+            use_container_width=True,
+
+            hide_index=True
+
+        )
+
+
+# =========================================================
+# ADMIN
+# =========================================================
+
+elif page == "🔑 Admin & Doanh thu":
+
+    st.title(
+        "🔑 Admin & Báo Cáo Doanh Thu"
+    )
+
+
+    if not st.session_state.admin_login:
+
+        password = st.text_input(
+
+            "Mật khẩu Admin",
+
+            type="password"
+
+        )
+
+
+        if st.button(
+            "🔐 Đăng nhập"
+        ):
+
+            if password == "123456":
+
+                st.session_state.admin_login = True
+
+                st.rerun()
+
+            else:
+
+                st.error(
+                    "❌ Mật khẩu không đúng."
+                )
+
 
         st.stop()
 
-    col_header, col_logout = st.columns([4, 1])
 
-    with col_header:
-        st.success("Đã xác thực quyền Quản trị viên!")
+    st.success(
+        "🟢 Đã đăng nhập Admin"
+    )
 
-    with col_logout:
-        if st.button("🔒 Đăng xuất"):
-            st.session_state.admin_logged_in = False
-            st.rerun()
 
-    st.markdown("---")
-    st.subheader("📊 Lịch sử đặt phòng")
+    if st.button(
+        "🔒 Đăng xuất"
+    ):
 
-    booking_df = pd.DataFrame(st.session_state.booking_history)
+        st.session_state.admin_login = False
 
-    if not booking_df.empty:
-        st.dataframe(
-            booking_df,
-            use_container_width=True,
-            hide_index=True
+        st.rerun()
+
+
+    st.divider()
+
+
+    st.subheader(
+        "📊 Lịch sử đặt phòng"
+    )
+
+
+    df_booking = get_booking_history()
+
+
+    if df_booking.empty:
+
+        st.info(
+            "Chưa có lượt đặt phòng."
         )
 
-        total_revenue = pd.to_numeric(
-            booking_df["Thành tiền"],
+    else:
+
+        st.dataframe(
+
+            df_booking,
+
+            use_container_width=True,
+
+            hide_index=True
+
+        )
+
+
+        revenue = pd.to_numeric(
+
+            df_booking["Thành tiền"],
+
             errors="coerce"
+
         ).fillna(0).sum()
 
-        st.metric(
-            "💰 Tổng doanh thu",
-            f"{total_revenue:,.0f} VNĐ"
-        )
 
-        col_a, col_b = st.columns(2)
+        nights = pd.to_numeric(
 
-        with col_a:
+            df_booking["Số đêm"],
+
+            errors="coerce"
+
+        ).fillna(0).sum()
+
+
+        a, b, c = st.columns(3)
+
+
+        with a:
+
             st.metric(
-                "🧾 Số lượt đặt phòng",
-                len(booking_df)
+
+                "💰 Doanh thu",
+
+                f"{revenue:,.0f} VNĐ"
+
             )
 
-        with col_b:
+
+        with b:
+
             st.metric(
+
+                "🧾 Số lượt đặt",
+
+                len(df_booking)
+
+            )
+
+
+        with c:
+
+            st.metric(
+
                 "🛏️ Tổng số đêm",
-                pd.to_numeric(
-                    booking_df["Số đêm"],
-                    errors="coerce"
-                ).fillna(0).sum()
+
+                int(nights)
+
             )
-    else:
-        st.info("Chưa có dữ liệu đặt phòng.")
