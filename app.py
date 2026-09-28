@@ -28,7 +28,7 @@ DB_NAME = os.getenv("AIVEN_DATABASE", "defaultdb")
 try:
     DB_PASSWORD = str(st.secrets["aiven_mysql"]["password"]).strip()
 except Exception:
-    DB_PASSWORD = os.getenv("AIVEN_PASSWORD", "").strip()
+    DB_PASSWORD = os.getenv("AIVEN_", "AVNS_fh_sGw39hb7dkeMTvb2").strip()
 
 if not DB_PASSWORD:
     st.error("❌ Chưa có mật khẩu Aiven.")
