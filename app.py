@@ -38,7 +38,7 @@ DB_USER = os.getenv("AIVEN_USER", "avnadmin")
 DB_NAME = os.getenv("AIVEN_DATABASE", "defaultdb")
 
 try:
-    DB_PASSWORD = st.secrets["aiven_mysql"]["password"]
+    DB_PASSWORD = st.secrets["aiven_mysql"]["AVNS_NYGYHQq39WTXGmCOttF"]
 except Exception:
     DB_PASSWORD = os.getenv("AIVEN_PASSWORD", "")
 
