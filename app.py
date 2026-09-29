@@ -105,6 +105,7 @@ def init_db():
     )
     """)
 
+    # Khởi tạo dữ liệu mẫu nếu DB trống
     cursor.execute("SELECT COUNT(*) FROM employees")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
@@ -122,9 +123,9 @@ def init_db():
         """,
             [
                 ("101", "Đơn", 500000, "Trống"),
-                ("102", "Đôi", 800000, "Trống"),
+                ("102", "Đôi", 800000, "Đang ở"),
                 ("201", "VIP", 1500000, "Bảo trì"),
-                ("202", "Gia đình", 1200000, "Trống"),
+                ("202", "Gia đình", 1200000, "Đã đặt"),
             ],
         )
 
@@ -178,7 +179,7 @@ if "ai_messages" not in st.session_state:
 
 def login_screen():
     st.markdown(
-        "<h2 style='text-align: center;'>🏨 DỰ ÁN QUẢN LÝ KHÁCH SẠN</h2>",
+        "<h2 style='text-align: center;'>🏨 HỆ THỐNG QUẢN LÝ KHÁCH SẠN</h2>",
         unsafe_allow_html=True,
     )
 
@@ -261,21 +262,61 @@ def main():
 
         rooms_df = get_rooms()
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Tổng số phòng", len(rooms_df))
-        col2.metric(
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Tổng số phòng", len(rooms_df))
+        c2.metric(
             "Phòng trống", len(rooms_df[rooms_df["Trạng thái"] == "Trống"])
         )
-        col3.metric(
+        c3.metric(
             "Đang ở / Đã đặt",
             len(rooms_df[rooms_df["Trạng thái"].isin(["Đang ở", "Đã đặt"])]),
         )
-        col4.metric(
+        c4.metric(
             "Bảo trì", len(rooms_df[rooms_df["Trạng thái"] == "Bảo trì"])
         )
 
         st.divider()
-        st.dataframe(rooms_df, use_container_width=True, hide_index=True)
+
+        # Hiển thị trực quan dạng Grid/Card
+        status_colors = {
+            "Trống": "#28a745",
+            "Đang ở": "#dc3545",
+            "Đã đặt": "#ffc107",
+            "Bảo trì": "#6c757d",
+        }
+
+        cols = st.columns(4)
+        for idx, row in rooms_df.iterrows():
+            col = cols[idx % 4]
+            bg_color = status_colors.get(row["Trạng thái"], "#ffffff")
+            with col:
+                st.markdown(
+                    f"""
+                    <div style="
+                        border: 1px solid #ddd;
+                        border-radius: 8px;
+                        padding: 12px;
+                        margin-bottom: 15px;
+                        background-color: {bg_color}15;
+                        border-left: 5px solid {bg_color};
+                    ">
+                        <h4 style="margin:0;">Phòng {row['Số phòng']}</h4>
+                        <p style="margin:2px 0;"><b>Loại:</b> {row['Loại phòng']}</p>
+                        <p style="margin:2px 0;"><b>Giá:</b> {money(row['Giá/Đêm'])}</p>
+                        <span style="
+                            background-color: {bg_color};
+                            color: white;
+                            padding: 2px 8px;
+                            border-radius: 4px;
+                            font-size: 12px;
+                        ">{row['Trạng thái']}</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        with st.expander("📄 Xem bảng chi tiết"):
+            st.dataframe(rooms_df, use_container_width=True, hide_index=True)
 
         if role_allowed("Quản trị viên") or role_allowed("Lễ tân"):
             with st.expander("➕ Cập nhật trạng thái phòng nhanh"):
@@ -303,11 +344,7 @@ def main():
 
     # --- 2. QUẢN LÝ SỰ CỐ & BẢO TRÌ ---
     elif page == "🔧 Quản lý sự cố & bảo trì":
-        ai_model = st.selectbox(
-    "Chọn mô hình AI:",
-    ["gemini-2.5-flash", "gemini-2.5-pro"],
-    key="gemini_model_select_box",
-)
+        st.title("🔧 Quản lý sự cố & bảo trì")
         tab_report, tab_list = st.tabs(
             ["🚨 Báo cáo sự cố mới", "📋 Danh sách sự cố"]
         )
@@ -341,12 +378,7 @@ def main():
                     "Chưa phân công",
                     key="maint_assign_input",
                 )
-                submit_maint = st.form_submit_button(
-                    response = client.models.generate_content(
-    model=ai_model,  # Hoặc ghi rõ: model="gemini-2.5-flash"
-    contents=contents
-)
-                )
+                submit_maint = st.form_submit_button("Gửi báo cáo sự cố")
 
             if submit_maint:
                 if not title.strip():
@@ -384,7 +416,7 @@ def main():
                 """
                 SELECT 
                     m.id AS `ID`,
-                    COALESCE(CONCAT('P.', r.room_number), 'Khu vực chung') AS `Vị trí`,
+                    COALESCE('P.' || r.room_number, 'Khu vực chung') AS `Vị trí`,
                     m.title AS `Sự cố`,
                     m.description AS `Mô tả`,
                     m.priority AS `Ưu tiên`,
@@ -401,54 +433,68 @@ def main():
             if not maint_df.empty:
                 st.divider()
                 st.subheader("🔄 Cập nhật tiến độ bảo trì")
-                m_id = st.selectbox(
-                    "Chọn mã sự cố",
-                    maint_df["ID"].tolist(),
-                    key="maint_id_select",
-                )
-                m_status = st.selectbox(
-                    "Trạng thái mới",
-                    MAINTENANCE_STATUSES,
-                    key="maint_status_select",
-                )
-
-                if st.button("💾 Cập nhật bảo trì", key="btn_update_maint"):
-                    completed_at = (
-                        datetime.now() if m_status == "Hoàn thành" else None
+                c_sel, c_stat, c_btn = st.columns([1, 1, 1])
+                with c_sel:
+                    m_id = st.selectbox(
+                        "Chọn mã sự cố",
+                        maint_df["ID"].tolist(),
+                        key="maint_id_select",
                     )
-                    execute_sql(
-                        """
-                        UPDATE maintenance 
-                        SET status=:status, completed_at=:completed_at 
-                        WHERE id=:id
-                        """,
-                        {
-                            "status": m_status,
-                            "completed_at": completed_at,
-                            "id": int(m_id),
-                        },
+                with c_stat:
+                    m_status = st.selectbox(
+                        "Trạng thái mới",
+                        MAINTENANCE_STATUSES,
+                        key="maint_status_select",
                     )
 
-                    target_room = read_df(
-                        "SELECT room_id FROM maintenance WHERE id=:id",
-                        {"id": int(m_id)},
-                    )
-                    if (
-                        not target_room.empty
-                        and target_room.iloc[0]["room_id"]
-                        and m_status == "Hoàn thành"
+                with c_btn:
+                    st.write("")  # Căn lề nút bấm
+                    st.write("")
+                    if st.button(
+                        "💾 Cập nhật",
+                        use_container_width=True,
+                        key="btn_update_maint",
                     ):
+                        completed_at = (
+                            datetime.now() if m_status == "Hoàn thành" else None
+                        )
                         execute_sql(
-                            "UPDATE rooms SET status='Trống' WHERE id=:id",
-                            {"id": int(target_room.iloc[0]["room_id"])},
+                            """
+                            UPDATE maintenance 
+                            SET status=:status, completed_at=:completed_at 
+                            WHERE id=:id
+                            """,
+                            {
+                                "status": m_status,
+                                "completed_at": completed_at,
+                                "id": int(m_id),
+                            },
                         )
 
-                    log_action(
-                        user["username"],
-                        f"Cập nhật sự cố #{m_id} -> {m_status}",
-                    )
-                    st.success("✅ Đã cập nhật trạng thái sự cố.")
-                    st.rerun()
+                        target_room = read_df(
+                            "SELECT room_id FROM maintenance WHERE id=:id",
+                            {"id": int(m_id)},
+                        )
+                        if (
+                            not target_room.empty
+                            and target_room.iloc[0]["room_id"]
+                            and m_status == "Hoàn thành"
+                        ):
+                            execute_sql(
+                                "UPDATE rooms SET status='Trống' WHERE id=:id",
+                                {
+                                    "id": int(
+                                        target_room.iloc[0]["room_id"]
+                                    )
+                                },
+                            )
+
+                        log_action(
+                            user["username"],
+                            f"Cập nhật sự cố #{m_id} -> {m_status}",
+                        )
+                        st.success("✅ Đã cập nhật trạng thái sự cố.")
+                        st.rerun()
 
     # --- 3. BÁO CÁO DOANH THU ---
     elif page == "📊 Báo cáo doanh thu":
@@ -538,32 +584,10 @@ def main():
             )
             st.rerun()
 
-    # --- 6. TRỢ LÝ AI GEMINI HỆN ĐẠI ---
-    with st.sidebar:
-            st.markdown("---")
-            st.subheader("⚙️ Cấu hình Gemini AI")
-            gemini_key = st.text_input(
-                "Google Gemini API Key:",
-                value=default_api_key,
-                type="password",
-                key="gemini_api_key_sidebar_input",
-            )
-            ai_model = st.selectbox(
-                "Chọn mô hình AI:",
-                ["gemini-3.8-flash", "gemini-2.5-pro"],
-                key="gemini_model_select_box",
-            )
+    # --- 6. TRỢ LÝ AI GEMINI ---
+    elif page == "🤖 Trợ lý AI Gemini":
+        st.title("🤖 Trợ lý AI Gemini")
 
-            if st.button(
-                "🗑️ Xóa lịch sử Chat AI",
-                use_container_width=True,
-                key="btn_clear_ai_history",
-            ):
-                st.session_state["ai_messages"] = []
-                st.rerun()
-    
-
-        # Lấy API key từ Secrets nếu có
         default_api_key = st.secrets.get("GEMINI_API_KEY", "")
 
         with st.sidebar:
@@ -599,7 +623,7 @@ def main():
         ):
             if not gemini_key:
                 st.error(
-                    "⚠️ Vui lòng nhập Gemini API Key ở Sidebar góc trái (hoặc cấu hình Streamlit Secrets)!"
+                    "⚠️ Vui lòng nhập Gemini API Key ở Sidebar góc trái!"
                 )
             else:
                 st.session_state["ai_messages"].append(
