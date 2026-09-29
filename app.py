@@ -596,16 +596,16 @@ def main():
                 type="password",
                 key="openrouter_api_key_sidebar_input",
             )
-     ai_model = st.selectbox(
-         "Chọn mô hình AI:",
-    [
-        "google/gemini-2.0-flash-exp:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "openai/gpt-4o-mini",
-        "deepseek/deepseek-r1:free",
-    ],
-         key="openrouter_model_select_box",
-)
+            ai_model = st.selectbox(
+                "Chọn mô hình AI:",
+                [
+                    "google/gemini-2.0-flash-exp:free",
+                    "meta-llama/llama-3.3-70b-instruct:free",
+                    "openai/gpt-4o-mini",
+                    "deepseek/deepseek-r1:free",
+                ],
+                key="openrouter_model_select_box",
+            )
 
             if st.button(
                 "🗑️ Xóa lịch sử Chat AI",
