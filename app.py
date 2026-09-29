@@ -1,1215 +1,489 @@
-from datetime import date, datetime, timedelta
-from urllib.parse import quote_plus
-
 import pandas as pd
-import pymysql
+import sqlite3
 import streamlit as st
-from sqlalchemy import create_engine, text
+from datetime import datetime, date, timedelta
 
 # =========================================================
-# HOTEL 4 STAR - STREAMLIT + AIVEN MYSQL
+# 1. CẤU HÌNH TRANG & DỮ LIỆU MẪU
 # =========================================================
-# Bản hoàn chỉnh tích hợp toàn bộ các tab chức năng và AI Chatbox
-# =========================================================
-
 st.set_page_config(
-    page_title="Hotel 4★ Management",
+    page_title="Hệ thống Quản lý Khách sạn",
     page_icon="🏨",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
 
+DB_FILE = "hotel_management.db"
+
+ROOM_TYPES = ["Đơn", "Đôi", "VIP", "Gia đình"]
+ROOM_STATUSES = ["Trống", "Đã đặt", "Đang ở", "Bảo trì"]
+MAINTENANCE_STATUSES = ["Mới", "Đang xử lý", "Hoàn thành", "Hủy"]
+PRIORITIES = ["Thấp", "Trung bình", "Cao", "Khẩn cấp"]
+ROLES = ["Lễ tân", "Bảo trì", "Kế toán", "Quản lý", "Quản trị viên"]
+
 # =========================================================
-# AIVEN MYSQL CONNECTION
+# 2. KHỞI TẠO CƠ SỞ DỮ LIỆU (SQLITE)
 # =========================================================
-
-DB_HOST = "mysql-11e928b1-nbhieuphung2005-1a49.h.aivencloud.com"
-DB_PORT = 18185
-DB_USER = "avnadmin"
-DB_PASSWORD = "AVNS_vDsaU2snGWjBZuSHONt"
-DB_NAME = "defaultdb"
-
-
-def make_connection():
-    """Tạo kết nối MySQL tới Aiven với yêu cầu TLS bắt buộc."""
-    return pymysql.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME,
-        charset="utf8mb4",
-        autocommit=True,
-        connect_timeout=30,
-        read_timeout=30,
-        write_timeout=30,
-        ssl_verify_cert=False,
-    )
-
-
-@st.cache_resource
 def get_db():
-    # Kiểm tra thông tin kết nối và database ngay lập tức
-    test = make_connection()
-    test.close()
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-    # Mã hóa mật khẩu tránh lỗi ký tự đặc biệt trong SQLAlchemy URL
-    encoded_password = quote_plus(DB_PASSWORD)
-    db_url = f"mysql+pymysql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+def init_db():
+    conn = get_db()
+    cursor = conn.cursor()
 
-    return create_engine(
-        db_url,
-        creator=make_connection,
-        pool_pre_ping=True,
-        pool_recycle=1800,
+    # Bảng nhân viên
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS employees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT NOT NULL,
+        phone TEXT,
+        active INTEGER DEFAULT 1,
+        created_at TIMESTAMP
     )
+    """)
 
-
-try:
-    DB = get_db()
-except Exception as exc:
-    st.error("❌ Không thể kết nối MySQL Aiven")
-    st.code(str(exc))
-    st.info(
-        "Host / Port / User / Database đang dùng:\n"
-        f"Host = {DB_HOST}\n"
-        f"Port = {DB_PORT}\n"
-        f"User = {DB_USER}\n"
-        f"Database = {DB_NAME}\n\n"
-        "Nếu lỗi 1045, hãy kiểm tra lại quyền truy cập hoặc mật khẩu trên Aiven Console."
+    # Bảng phòng
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS rooms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_number TEXT UNIQUE NOT NULL,
+        room_type TEXT NOT NULL,
+        price_per_night REAL NOT NULL,
+        status TEXT DEFAULT 'Trống'
     )
-    st.stop()
+    """)
 
+    # Bảng bảo trì
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS maintenance (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER,
+        title TEXT NOT NULL,
+        description TEXT,
+        priority TEXT NOT NULL,
+        status TEXT DEFAULT 'Mới',
+        assigned_to TEXT,
+        created_at TIMESTAMP,
+        completed_at TIMESTAMP,
+        FOREIGN KEY (room_id) REFERENCES rooms(id)
+    )
+    """)
 
-def execute_sql(query, params=None):
-    with DB.begin() as conn:
-        return conn.execute(text(query), params or {})
+    # Bảng thanh toán / doanh thu
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER,
+        customer_name TEXT,
+        amount REAL NOT NULL,
+        paid_at TIMESTAMP,
+        FOREIGN KEY (room_id) REFERENCES rooms(id)
+    )
+    """)
 
+    # Bảng nhắn tin
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        display_name TEXT,
+        message TEXT,
+        created_at TIMESTAMP
+    )
+    """)
 
-def read_df(query, params=None):
-    with DB.connect() as conn:
-        return pd.read_sql(text(query), conn, params=params or {})
+    # Bảng nhật ký hoạt động
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        action TEXT,
+        created_at TIMESTAMP
+    )
+    """)
 
+    # Thêm tài khoản Admin mặc định nếu chưa có
+    cursor.execute("SELECT COUNT(*) FROM employees")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("""
+        INSERT INTO employees (full_name, username, password, role, phone, active, created_at)
+        VALUES ('Quản trị viên', 'admin', 'admin123', 'Quản trị viên', '0901234567', 1, ?)
+        """, (datetime.now(),))
+        
+        # Thêm một vài phòng mẫu
+        cursor.executemany("""
+        INSERT INTO rooms (room_number, room_type, price_per_night, status)
+        VALUES (?, ?, ?, ?)
+        """, [
+            ("101", "Đơn", 500000, "Trống"),
+            ("102", "Đôi", 800000, "Trống"),
+            ("201", "VIP", 1500000, "Bảo trì"),
+            ("202", "Gia đình", 1200000, "Trống")
+        ])
 
-def money(value):
-    return f"{float(value or 0):,.0f} VNĐ"
+    conn.commit()
+    conn.close()
 
+# Khoản hỗ trợ thao tác DB
+def execute_sql(query, params=()):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+    conn.commit()
+    conn.close()
+
+def read_df(query, params=()):
+    conn = get_db()
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+    return df
 
 def log_action(username, action):
     execute_sql(
-        """
-        INSERT INTO audit_logs (username, action, created_at)
-        VALUES (:username, :action, :created_at)
-        """,
-        {
-            "username": username,
-            "action": action,
-            "created_at": datetime.now(),
-        },
+        "INSERT INTO audit_logs (username, action, created_at) VALUES (?, ?, ?)",
+        (username, action, datetime.now())
     )
 
-
-# =========================================================
-# DATABASE TABLES
-# =========================================================
-
-def create_tables():
-    statements = [
-        """
-        CREATE TABLE IF NOT EXISTS employees (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            full_name VARCHAR(150) NOT NULL,
-            username VARCHAR(80) NOT NULL UNIQUE,
-            password VARCHAR(255) NOT NULL,
-            role VARCHAR(60) NOT NULL,
-            phone VARCHAR(30),
-            active TINYINT(1) NOT NULL DEFAULT 1,
-            created_at DATETIME NOT NULL
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS guests (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            full_name VARCHAR(150) NOT NULL,
-            phone VARCHAR(30),
-            email VARCHAR(150),
-            id_number VARCHAR(80),
-            address VARCHAR(255),
-            note TEXT,
-            created_at DATETIME NOT NULL
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS rooms (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            room_number VARCHAR(30) NOT NULL UNIQUE,
-            room_type VARCHAR(80) NOT NULL,
-            floor INT NOT NULL,
-            price DECIMAL(15,2) NOT NULL,
-            status VARCHAR(40) NOT NULL DEFAULT 'Trống',
-            note VARCHAR(255)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS bookings (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            guest_id BIGINT NOT NULL,
-            room_id BIGINT NOT NULL,
-            check_in DATE NOT NULL,
-            check_out DATE NOT NULL,
-            adults INT NOT NULL DEFAULT 1,
-            children INT NOT NULL DEFAULT 0,
-            status VARCHAR(50) NOT NULL DEFAULT 'Đã đặt',
-            source VARCHAR(50) NOT NULL DEFAULT 'Tại quầy',
-            note TEXT,
-            created_at DATETIME NOT NULL,
-            CONSTRAINT fk_booking_guest FOREIGN KEY (guest_id) REFERENCES guests(id),
-            CONSTRAINT fk_booking_room FOREIGN KEY (room_id) REFERENCES rooms(id)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS payments (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            booking_id BIGINT NOT NULL,
-            amount DECIMAL(15,2) NOT NULL,
-            method VARCHAR(50) NOT NULL,
-            payment_type VARCHAR(50) NOT NULL DEFAULT 'Thanh toán',
-            paid_at DATETIME NOT NULL,
-            note VARCHAR(255),
-            CONSTRAINT fk_payment_booking FOREIGN KEY (booking_id) REFERENCES bookings(id)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS housekeeping (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            room_id BIGINT NOT NULL UNIQUE,
-            status VARCHAR(50) NOT NULL DEFAULT 'Sạch',
-            staff VARCHAR(120) NOT NULL DEFAULT 'Chưa phân công',
-            updated_at DATETIME NOT NULL,
-            note VARCHAR(255),
-            CONSTRAINT fk_house_room FOREIGN KEY (room_id) REFERENCES rooms(id)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS maintenance (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            room_id BIGINT NULL,
-            title VARCHAR(180) NOT NULL,
-            description TEXT,
-            priority VARCHAR(30) NOT NULL DEFAULT 'Trung bình',
-            status VARCHAR(50) NOT NULL DEFAULT 'Mới',
-            assigned_to VARCHAR(120) NOT NULL DEFAULT 'Chưa phân công',
-            created_at DATETIME NOT NULL,
-            completed_at DATETIME NULL,
-            CONSTRAINT fk_maintenance_room FOREIGN KEY (room_id) REFERENCES rooms(id)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS audit_logs (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(80),
-            action VARCHAR(255) NOT NULL,
-            created_at DATETIME NOT NULL
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS chat_messages (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(80) NOT NULL,
-            display_name VARCHAR(150) NOT NULL,
-            message TEXT NOT NULL,
-            created_at DATETIME NOT NULL
-        )
-        """,
-    ]
-
-    with DB.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
-
-
-# =========================================================
-# SEED DATA
-# =========================================================
-
-def seed_data():
-    employee_count = int(read_df("SELECT COUNT(*) AS n FROM employees").iloc[0]["n"])
-    if employee_count == 0:
-        employees = [
-            ("Quản trị viên", "admin", "123456", "Quản trị viên", "0900000001"),
-            ("Lễ tân", "reception", "123456", "Lễ tân", "0900000002"),
-            ("Housekeeping", "housekeeping", "123456", "Housekeeping", "0900000003"),
-            ("Kế toán", "accounting", "123456", "Kế toán", "0900000004"),
-            ("Bảo trì", "maintenance", "123456", "Bảo trì", "0900000005"),
-        ]
-        with DB.begin() as conn:
-            for full_name, username, password, role, phone in employees:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO employees (full_name, username, password, role, phone, active, created_at)
-                        VALUES (:name, :username, :password, :role, :phone, 1, :created)
-                        """
-                    ),
-                    {
-                        "name": full_name,
-                        "username": username,
-                        "password": password,
-                        "role": role,
-                        "phone": phone,
-                        "created": datetime.now(),
-                    },
-                )
-
-    room_count = int(read_df("SELECT COUNT(*) AS n FROM rooms").iloc[0]["n"])
-    if room_count == 0:
-        rooms = [
-            ("101", "Standard", 1, 300000),
-            ("102", "Standard", 1, 300000),
-            ("103", "Standard", 1, 350000),
-            ("201", "Deluxe", 2, 450000),
-            ("202", "Deluxe", 2, 450000),
-            ("203", "Deluxe", 2, 500000),
-            ("301", "VIP", 3, 600000),
-            ("302", "VIP", 3, 800000),
-            ("401", "President", 4, 1500000),
-        ]
-        with DB.begin() as conn:
-            for room_number, room_type, floor, price in rooms:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO rooms (room_number, room_type, floor, price, status)
-                        VALUES (:number, :type, :floor, :price, 'Trống')
-                        """
-                    ),
-                    {
-                        "number": room_number,
-                        "type": room_type,
-                        "floor": floor,
-                        "price": price,
-                    },
-                )
-
-    room_rows = read_df("SELECT id FROM rooms")
-    existing_housekeeping = set(
-        int(x) for x in read_df("SELECT room_id FROM housekeeping")["room_id"].tolist()
-    )
-    with DB.begin() as conn:
-        for room_id in room_rows["id"].tolist():
-            if int(room_id) not in existing_housekeeping:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO housekeeping (room_id, status, staff, updated_at)
-                        VALUES (:room_id, 'Sạch', 'Chưa phân công', :now)
-                        """
-                    ),
-                    {"room_id": int(room_id), "now": datetime.now()},
-                )
-
-
-try:
-    create_tables()
-    seed_data()
-except Exception as exc:
-    st.error("❌ Kết nối được MySQL nhưng khởi tạo database thất bại.")
-    st.code(str(exc))
-    st.stop()
-
-
-# =========================================================
-# DATA HELPERS
-# =========================================================
-
-ROOM_STATUSES = ["Trống", "Đã đặt", "Đang ở", "Bảo trì"]
-HOUSEKEEPING_STATUSES = ["Sạch", "Cần dọn", "Đang dọn", "Đã kiểm tra"]
-PAYMENT_METHODS = ["Tiền mặt", "Chuyển khoản", "Thẻ", "Ví điện tử"]
-BOOKING_STATUSES = ["Đã đặt", "Đã check-in", "Đã check-out", "Đã hủy"]
-PRIORITIES = ["Thấp", "Trung bình", "Cao", "Khẩn cấp"]
-MAINTENANCE_STATUSES = ["Mới", "Đang xử lý", "Hoàn thành", "Đã hủy"]
-ROLES = ["Quản trị viên", "Lễ tân", "Housekeeping", "Kế toán", "Bảo trì"]
-
+def money(val):
+    return f"{val:,.0f} VNĐ"
 
 def get_rooms():
-    return read_df(
-        """
-        SELECT
-            r.id AS room_id,
-            CONCAT('P.', r.room_number) AS `Phòng`,
-            r.room_number,
-            r.room_type AS `Hạng phòng`,
-            r.floor AS `Tầng`,
-            r.price AS `Giá/đêm`,
-            r.status AS `Trạng thái`,
-            COALESCE(h.status, 'Sạch') AS `Housekeeping`,
-            COALESCE(h.staff, 'Chưa phân công') AS `Nhân viên`
-        FROM rooms r
-        LEFT JOIN housekeeping h ON h.room_id = r.id
-        ORDER BY r.floor, r.room_number
-        """
-    )
+    return read_df("SELECT id, room_number AS `Số phòng`, room_type AS `Loại phòng`, price_per_night AS `Giá/Đêm`, status AS `Trạng thái` FROM rooms")
 
-
-def get_bookings():
-    return read_df(
-        """
-        SELECT
-            b.id AS `Mã đặt`,
-            g.full_name AS `Khách hàng`,
-            g.phone AS `SĐT`,
-            CONCAT('P.', r.room_number) AS `Phòng`,
-            r.room_number,
-            r.room_type AS `Hạng phòng`,
-            b.check_in AS `Check-in`,
-            b.check_out AS `Check-out`,
-            DATEDIFF(b.check_out, b.check_in) AS `Số đêm`,
-            b.adults AS `Người lớn`,
-            b.children AS `Trẻ em`,
-            b.status AS `Trạng thái`,
-            b.source AS `Nguồn`,
-            COALESCE(SUM(p.amount), 0) AS `Đã thanh toán`
-        FROM bookings b
-        JOIN guests g ON g.id = b.guest_id
-        JOIN rooms r ON r.id = b.room_id
-        LEFT JOIN payments p ON p.booking_id = b.id
-        GROUP BY
-            b.id, g.full_name, g.phone, r.room_number, r.room_type,
-            b.check_in, b.check_out, b.adults, b.children,
-            b.status, b.source
-        ORDER BY b.id DESC
-        """
-    )
-
-
-def available_rooms(checkin, checkout):
-    return read_df(
-        """
-        SELECT r.id, r.room_number, r.room_type, r.price, r.floor
-        FROM rooms r
-        WHERE r.status <> 'Bảo trì'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM bookings b
-              WHERE b.room_id = r.id
-                AND b.status IN ('Đã đặt', 'Đã check-in')
-                AND b.check_in < :checkout
-                AND b.check_out > :checkin
-          )
-        ORDER BY r.floor, r.room_number
-        """,
-        {"checkin": checkin, "checkout": checkout},
-    )
-
-
-def booking_total(booking_id):
-    row = read_df(
-        """
-        SELECT
-            DATEDIFF(b.check_out, b.check_in) AS nights,
-            r.price
-        FROM bookings b
-        JOIN rooms r ON r.id = b.room_id
-        WHERE b.id = :booking_id
-        """,
-        {"booking_id": int(booking_id)},
-    )
-    if row.empty:
-        return 0
-    nights = max(1, int(row.iloc[0]["nights"]))
-    return nights * float(row.iloc[0]["price"])
-
-
-def role_allowed(*roles):
-    return st.session_state.user and st.session_state.user["role"] in roles
-
+# Initialize DB at startup
+init_db()
 
 # =========================================================
-# LOGIN STATE
+# 3. QUẢN LÝ ĐĂNG NHẬP & PHÂN QUYỀN
 # =========================================================
-
 if "user" not in st.session_state:
-    st.session_state.user = None
+    st.session_state["user"] = None
 
-if "page" not in st.session_state:
-    st.session_state.page = "🏠 Tổng quan"
-
-
-if st.session_state.user is None:
-    st.title("🏨 HOTEL 4★ MANAGEMENT")
-    st.caption("Streamlit + Aiven MySQL — Quản lý khách sạn toàn diện")
-
-    col1, col2 = st.columns([1, 1.15])
-
-    with col1:
-        st.subheader("🔐 Đăng nhập nhân viên")
+def login_screen():
+    st.markdown("<h2 style='text-align: center;'>🏨 DỰ ÁN QUẢN LÝ KHÁCH SẠN</h2>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
         with st.form("login_form"):
-            username = st.text_input("Tên đăng nhập")
+            st.subheader("🔑 Đăng nhập hệ thống")
+            username = st.text_input("Tên tài khoản")
             password = st.text_input("Mật khẩu", type="password")
-            submitted = st.form_submit_button("🚀 Đăng nhập", use_container_width=True)
+            submit = st.form_submit_button("Đăng nhập", use_container_width=True)
 
-        if submitted:
-            user_df = read_df(
-                """
-                SELECT id, full_name, username, role, phone
-                FROM employees
-                WHERE username=:username AND password=:password AND active=1
-                LIMIT 1
-                """,
-                {"username": username.strip(), "password": password},
-            )
-
-            if user_df.empty:
-                st.error("❌ Sai tài khoản hoặc mật khẩu.")
-            else:
-                st.session_state.user = user_df.iloc[0].to_dict()
-                log_action(username.strip(), "Đăng nhập hệ thống")
-                st.rerun()
-
-    with col2:
-        st.info(
-            """
-            ### Tài khoản demo
-
-            `admin / 123456` (Quản trị viên)
-
-            `reception / 123456` (Lễ tân)
-
-            `housekeeping / 123456` (Housekeeping)
-
-            `accounting / 123456` (Kế toán)
-
-            `maintenance / 123456` (Bảo trì)
-            """
-        )
-
-    st.stop()
-
-
-user = st.session_state.user
-
-
-# =========================================================
-# SIDEBAR
-# =========================================================
-
-st.sidebar.title("🏨 HOTEL 4★")
-st.sidebar.success(f"👤 {user['full_name']}\n\n🔑 {user['role']}")
-st.sidebar.caption(f"🟢 Database: {DB_NAME}")
-
-menus = [
-    "🏠 Tổng quan",
-    "🛎️ Quản lý đặt phòng",
-    "🚪 Check-in / Check-out",
-    "👥 Quản lý khách",
-    "💳 Quản lý thanh toán",
-    "🧹 Housekeeping",
-    "🔧 Quản lý bảo trì",
-    "📊 Báo cáo doanh thu",
-    "📈 Công suất phòng",
-    "💬 Chatbox / Bình luận",
-]
-
-if role_allowed("Quản trị viên"):
-    menus.append("👨‍💼 Phân quyền nhân viên")
-
-for item in menus:
-    if st.sidebar.button(item, use_container_width=True):
-        st.session_state.page = item
-
-if st.sidebar.button("🚪 Đăng xuất", use_container_width=True):
-    log_action(user["username"], "Đăng xuất hệ thống")
-    st.session_state.user = None
-    st.rerun()
-
-page = st.session_state.page
-
-
-# =========================================================
-# 1. TỔNG QUAN
-# =========================================================
-
-if page == "🏠 Tổng quan":
-    st.title("🏨 Dashboard khách sạn 4 sao")
-    st.caption(f"Xin chào {user['full_name']} — {datetime.now():%d/%m/%Y %H:%M}")
-
-    rooms = get_rooms()
-    bookings = get_bookings()
-
-    total_rooms = len(rooms)
-    occupied = int((rooms["Trạng thái"] == "Đang ở").sum())
-    reserved = int((rooms["Trạng thái"] == "Đã đặt").sum())
-    clean = int((rooms["Housekeeping"] == "Sạch").sum())
-    maintenance = int((rooms["Trạng thái"] == "Bảo trì").sum())
-
-    a, b, c, d, e = st.columns(5)
-    a.metric("🛏️ Tổng phòng", total_rooms)
-    b.metric("🔴 Đang ở", occupied)
-    c.metric("🟡 Đã đặt", reserved)
-    d.metric("🟢 Sạch", clean)
-    e.metric("🔧 Bảo trì", maintenance)
-
-    st.divider()
-
-    occupancy = occupied / total_rooms * 100 if total_rooms else 0
-
-    st.subheader("⚡ Công suất hiện tại")
-    st.progress(min(1.0, occupancy / 100))
-    st.write(f"**{occupancy:.1f}%** phòng đang có khách.")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("🚨 Phòng cần xử lý")
-        urgent = rooms[
-            rooms["Housekeeping"].isin(["Cần dọn", "Đang dọn"])
-            | rooms["Trạng thái"].eq("Bảo trì")
-        ]
-        st.dataframe(urgent, use_container_width=True, hide_index=True)
-
-    with col2:
-        st.subheader("🛎️ Booking mới nhất")
-        st.dataframe(bookings.head(8), use_container_width=True, hide_index=True)
-
-
-# =========================================================
-# 2. QUẢN LÝ ĐẶT PHÒNG
-# =========================================================
-
-elif page == "🛎️ Quản lý đặt phòng":
-    st.title("🛎️ Quản lý đặt phòng")
-
-    tab_new, tab_list = st.tabs(["➕ Tạo đặt phòng", "📋 Danh sách"])
-
-    with tab_new:
-        guests = read_df("SELECT id, full_name, phone FROM guests ORDER BY full_name")
-
-        if guests.empty:
-            st.warning("Chưa có khách hàng. Hãy tạo khách trước tại mục Quản lý khách.")
-        else:
-            guest_map = {
-                f"{row['full_name']} — {row['phone'] or 'Không có SĐT'}": int(row["id"])
-                for _, row in guests.iterrows()
-            }
-
-            c1, c2 = st.columns(2)
-
-            with c1:
-                guest_label = st.selectbox("👤 Khách hàng", list(guest_map.keys()))
-                checkin = st.date_input("📅 Check-in", date.today(), key="book_checkin")
-                adults = st.number_input("👨 Người lớn", 1, 10, 1)
-                source = st.selectbox("📱 Nguồn đặt", ["Tại quầy", "Điện thoại", "Website", "OTA"])
-
-            with c2:
-                checkout = st.date_input(
-                    "📅 Check-out", date.today() + timedelta(days=1), key="book_checkout"
+            if submit:
+                res = read_df(
+                    "SELECT * FROM employees WHERE username=:u AND password=:p AND active=1",
+                    {"u": username, "p": password}
                 )
-                children = st.number_input("👶 Trẻ em", 0, 10, 0)
-                note = st.text_area("📝 Ghi chú")
-
-            if checkout <= checkin:
-                st.error("Check-out phải sau Check-in.")
-            else:
-                available = available_rooms(checkin, checkout)
-
-                if available.empty:
-                    st.error("Không còn phòng trống trong khoảng thời gian này.")
+                if not res.empty:
+                    user_info = res.iloc[0].to_dict()
+                    st.session_state["user"] = user_info
+                    log_action(user_info["username"], "Đăng nhập thành công")
+                    st.success("Đăng nhập thành công!")
+                    st.rerun()
                 else:
-                    room_labels = [
-                        f"P.{row['room_number']} — {row['room_type']} — {money(row['price'])}/đêm"
-                        for _, row in available.iterrows()
-                    ]
+                    st.error("❌ Tên tài khoản hoặc mật khẩu không chính xác!")
 
-                    selected_room = st.selectbox("🚪 Chọn phòng", room_labels)
-                    idx = room_labels.index(selected_room)
-                    room = available.iloc[idx]
-                    nights = (checkout - checkin).days
-                    total = nights * float(room["price"])
-
-                    st.success(f"Phòng P.{room['room_number']} • {nights} đêm • Tổng: {money(total)}")
-
-                    if st.button("✅ Xác nhận đặt phòng", use_container_width=True):
-                        execute_sql(
-                            """
-                            INSERT INTO bookings
-                            (guest_id, room_id, check_in, check_out, adults, children, status, source, note, created_at)
-                            VALUES
-                            (:guest_id, :room_id, :check_in, :check_out, :adults, :children, 'Đã đặt', :source, :note, :created_at)
-                            """,
-                            {
-                                "guest_id": guest_map[guest_label],
-                                "room_id": int(room["id"]),
-                                "check_in": checkin,
-                                "check_out": checkout,
-                                "adults": int(adults),
-                                "children": int(children),
-                                "source": source,
-                                "note": note,
-                                "created_at": datetime.now(),
-                            },
-                        )
-
-                        execute_sql(
-                            "UPDATE rooms SET status='Đã đặt' WHERE id=:room_id",
-                            {"room_id": int(room["id"])},
-                        )
-
-                        log_action(user["username"], f"Tạo booking P.{room['room_number']}")
-                        st.success("🎉 Đặt phòng thành công!")
-                        st.rerun()
-
-    with tab_list:
-        st.dataframe(get_bookings(), use_container_width=True, hide_index=True)
-
+def role_allowed(required_role):
+    user = st.session_state.get("user")
+    if not user:
+        return False
+    if user["role"] == "Quản trị viên":
+        return True
+    return user["role"] == required_role
 
 # =========================================================
-# 3. CHECK-IN / CHECK-OUT
+# 4. CHƯƠNG TRÌNH CHÍNH (MAIN APP)
 # =========================================================
+def main():
+    if not st.session_state["user"]:
+        login_screen()
+        return
 
-elif page == "🚪 Check-in / Check-out":
-    st.title("🚪 Check-in / Check-out")
+    user = st.session_state["user"]
 
-    bookings = get_bookings()
-    active = bookings[bookings["Trạng thái"].isin(["Đã đặt", "Đã check-in"])]
+    # --- SIDEBAR ---
+    st.sidebar.title(f"👤 {user['full_name']}")
+    st.sidebar.caption(f"Chức vụ: **{user['role']}**")
 
-    if active.empty:
-        st.info("Không có booking đang chờ xử lý.")
-    else:
-        booking_id = st.selectbox("🧾 Mã đặt phòng", active["Mã đặt"].tolist())
-        row = active[active["Mã đặt"] == booking_id].iloc[0]
+    page_options = [
+        "🏨 Sơ đồ phòng",
+        "🔧 Quản lý sự cố & bảo trì",
+        "📊 Báo cáo doanh thu",
+        "📈 Công suất phòng",
+        "💬 Chatbox / Bình luận",
+        "👨‍💼 Phân quyền nhân viên"
+    ]
+    
+    page = st.sidebar.radio("Điều hướng menu", page_options)
 
-        a, b, c = st.columns(3)
-        a.metric("👤 Khách", row["Khách hàng"])
-        b.metric("🚪 Phòng", row["Phòng"])
-        c.metric("📌 Trạng thái", row["Trạng thái"])
-
-        if row["Trạng thái"] == "Đã đặt":
-            if st.button("🟢 CHECK-IN", use_container_width=True):
-                execute_sql(
-                    "UPDATE bookings SET status='Đã check-in' WHERE id=:id",
-                    {"id": int(booking_id)},
-                )
-                execute_sql(
-                    "UPDATE rooms SET status='Đang ở' WHERE room_number=:room",
-                    {"room": row["room_number"]},
-                )
-                log_action(user["username"], f"Check-in booking #{booking_id}")
-                st.success("✅ Check-in thành công!")
-                st.rerun()
-
-        if row["Trạng thái"] == "Đã check-in":
-            if st.button("🔵 CHECK-OUT", use_container_width=True):
-                execute_sql(
-                    "UPDATE bookings SET status='Đã check-out' WHERE id=:id",
-                    {"id": int(booking_id)},
-                )
-                execute_sql(
-                    "UPDATE rooms SET status='Trống' WHERE room_number=:room",
-                    {"room": row["room_number"]},
-                )
-                room_id_row = read_df(
-                    "SELECT id FROM rooms WHERE room_number=:room",
-                    {"room": row["room_number"]},
-                )
-                if not room_id_row.empty:
-                    execute_sql(
-                        """
-                        UPDATE housekeeping
-                        SET status='Cần dọn', updated_at=:updated_at
-                        WHERE room_id=:room_id
-                        """,
-                        {
-                            "updated_at": datetime.now(),
-                            "room_id": int(room_id_row.iloc[0]["id"]),
-                        },
-                    )
-                log_action(user["username"], f"Check-out booking #{booking_id}")
-                st.success("✅ Check-out thành công. Phòng đã chuyển sang trạng thái Cần dọn.")
-                st.rerun()
-
-
-# =========================================================
-# 4. QUẢN LÝ KHÁCH
-# =========================================================
-
-elif page == "👥 Quản lý khách":
-    st.title("👥 Quản lý thông tin khách")
-
-    tab1, tab2 = st.tabs(["➕ Thêm khách", "📋 Danh sách khách"])
-
-    with tab1:
-        with st.form("guest_form"):
-            name = st.text_input("Họ và tên *")
-            phone = st.text_input("Số điện thoại")
-            email = st.text_input("Email")
-            id_number = st.text_input("CCCD / Hộ chiếu")
-            address = st.text_input("Địa chỉ")
-            note = st.text_area("Ghi chú")
-            submit = st.form_submit_button("💾 Lưu khách hàng", use_container_width=True)
-
-        if submit:
-            if not name.strip():
-                st.error("Vui lòng nhập họ tên khách hàng.")
-            else:
-                execute_sql(
-                    """
-                    INSERT INTO guests (full_name, phone, email, id_number, address, note, created_at)
-                    VALUES (:name, :phone, :email, :id_number, :address, :note, :created_at)
-                    """,
-                    {
-                        "name": name.strip(),
-                        "phone": phone,
-                        "email": email,
-                        "id_number": id_number,
-                        "address": address,
-                        "note": note,
-                        "created_at": datetime.now(),
-                    },
-                )
-                log_action(user["username"], f"Thêm khách {name}")
-                st.success("✅ Đã lưu hồ sơ khách hàng.")
-                st.rerun()
-
-    with tab2:
-        guest_df = read_df(
-            """
-            SELECT
-                id AS `ID`,
-                full_name AS `Họ tên`,
-                phone AS `SĐT`,
-                email AS `Email`,
-                id_number AS `CCCD/Hộ chiếu`,
-                address AS `Địa chỉ`,
-                note AS `Ghi chú`
-            FROM guests
-            ORDER BY id DESC
-            """
-        )
-        st.dataframe(guest_df, use_container_width=True, hide_index=True)
-
-
-# =========================================================
-# 5. QUẢN LÝ THANH TOÁN
-# =========================================================
-
-elif page == "💳 Quản lý thanh toán":
-    st.title("💳 Quản lý thanh toán")
-
-    bookings = get_bookings()
-    active = bookings[bookings["Trạng thái"].isin(["Đã đặt", "Đã check-in"])]
-
-    if active.empty:
-        st.info("Không có booking cần thanh toán.")
-    else:
-        booking_id = st.selectbox("🧾 Mã đặt phòng", active["Mã đặt"].tolist())
-        row = active[active["Mã đặt"] == booking_id].iloc[0]
-        total = booking_total(booking_id)
-        paid = float(row["Đã thanh toán"] or 0)
-        remaining = max(0, total - paid)
-
-        a, b, c = st.columns(3)
-        a.metric("💰 Tổng tiền", money(total))
-        b.metric("💵 Đã trả", money(paid))
-        c.metric("🧾 Còn lại", money(remaining))
-
-        amount = st.number_input(
-            "Số tiền thanh toán",
-            min_value=0.0,
-            max_value=float(remaining) if remaining > 0 else 1.0,
-            value=float(remaining),
-            step=50000.0,
-        )
-        method = st.selectbox("Phương thức", PAYMENT_METHODS)
-        payment_type = st.selectbox("Loại giao dịch", ["Đặt cọc", "Thanh toán"])
-        note = st.text_input("Ghi chú")
-
-        if st.button("💰 Ghi nhận thanh toán", use_container_width=True):
-            if amount <= 0:
-                st.error("Số tiền phải lớn hơn 0.")
-            else:
-                execute_sql(
-                    """
-                    INSERT INTO payments (booking_id, amount, method, payment_type, paid_at, note)
-                    VALUES (:booking_id, :amount, :method, :payment_type, :paid_at, :note)
-                    """,
-                    {
-                        "booking_id": int(booking_id),
-                        "amount": amount,
-                        "method": method,
-                        "payment_type": payment_type,
-                        "paid_at": datetime.now(),
-                        "note": note,
-                    },
-                )
-                log_action(user["username"], f"Thanh toán {money(amount)} booking #{booking_id}")
-                st.success("✅ Đã ghi nhận thanh toán thành công.")
-                st.rerun()
-
-    st.divider()
-    st.subheader("📋 Lịch sử giao dịch")
-    st.dataframe(
-        read_df(
-            """
-            SELECT
-                p.id AS `ID`,
-                p.booking_id AS `Mã đặt`,
-                g.full_name AS `Khách`,
-                p.amount AS `Số tiền`,
-                p.method AS `Phương thức`,
-                p.payment_type AS `Loại`,
-                p.paid_at AS `Thời gian`,
-                p.note AS `Ghi chú`
-            FROM payments p
-            JOIN bookings b ON b.id=p.booking_id
-            JOIN guests g ON g.id=b.guest_id
-            ORDER BY p.id DESC
-            """
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-
-# =========================================================
-# 6. HOUSEKEEPING
-# =========================================================
-
-elif page == "🧹 Housekeeping":
-    st.title("🧹 Quản lý Housekeeping")
-
-    rooms = get_rooms()
-    st.dataframe(rooms, use_container_width=True, hide_index=True)
-    st.divider()
-
-    selected_room = st.selectbox("🚪 Chọn phòng", rooms["Phòng"].tolist())
-    current = rooms[rooms["Phòng"] == selected_room].iloc[0]
-
-    status = st.selectbox(
-        "Trạng thái vệ sinh",
-        HOUSEKEEPING_STATUSES,
-        index=(
-            HOUSEKEEPING_STATUSES.index(current["Housekeeping"])
-            if current["Housekeeping"] in HOUSEKEEPING_STATUSES
-            else 0
-        ),
-    )
-    staff = st.text_input("👷 Nhân viên phụ trách", current["Nhân viên"])
-    note = st.text_input("📝 Ghi chú")
-
-    if st.button("💾 Lưu cập nhật", use_container_width=True):
-        execute_sql(
-            """
-            UPDATE housekeeping
-            SET status=:status, staff=:staff, updated_at=:updated_at, note=:note
-            WHERE room_id=:room_id
-            """,
-            {
-                "status": status,
-                "staff": staff,
-                "updated_at": datetime.now(),
-                "note": note,
-                "room_id": int(current["room_id"]),
-            },
-        )
-        log_action(user["username"], f"Cập nhật housekeeping P.{current['room_number']}")
-        st.success("✅ Đã cập nhật trạng thái phòng.")
+    if st.sidebar.button("🚪 Đăng xuất", use_container_width=True):
+        log_action(user["username"], "Đăng xuất")
+        st.session_state["user"] = None
         st.rerun()
 
+    st.sidebar.divider()
+    st.sidebar.caption("Hệ thống Quản lý Khách sạn v2.0")
 
-# =========================================================
-# 7. QUẢN LÝ BẢO TRÌ
-# =========================================================
+    # --- 1. SƠ ĐỒ PHÒNG ---
+    if page == "🏨 Sơ đồ phòng":
+        st.title("🏨 Sơ đồ & Quản lý danh sách phòng")
+        
+        rooms_df = get_rooms()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Tổng số phòng", len(rooms_df))
+        col2.metric("Phòng trống", len(rooms_df[rooms_df["Trạng thái"] == "Trống"]))
+        col3.metric("Đang ở / Đã đặt", len(rooms_df[rooms_df["Trạng thái"].isin(["Đang ở", "Đã đặt"])]))
+        col4.metric("Bảo trì", len(rooms_df[rooms_df["Trạng thái"] == "Bảo trì"]))
+        
+        st.divider()
+        st.dataframe(rooms_df, use_container_width=True, hide_index=True)
 
-elif page == "🔧 Quản lý bảo trì":
-    st.title("🔧 Quản lý sự cố & bảo trì")
+        if role_allowed("Quản trị viên") or role_allowed("Lễ tân"):
+            with st.expander("➕ Cập nhật trạng thái phòng nhanh"):
+                with st.form("update_room_status"):
+                    selected_room = st.selectbox("Chọn phòng", rooms_df["Số phòng"].tolist())
+                    new_status = st.selectbox("Trạng thái mới", ROOM_STATUSES)
+                    btn_update = st.form_submit_button("Cập nhật")
+                    if btn_update:
+                        execute_sql(
+                            "UPDATE rooms SET status=:status WHERE room_number=:room_num",
+                            {"status": new_status, "room_num": selected_room}
+                        )
+                        st.success(f"Đã cập nhật phòng {selected_room} sang '{new_status}'")
+                        st.rerun()
 
-    tab_add, tab_list = st.tabs(["➕ Báo cáo sự cố", "📋 Danh sách bảo trì"])
+    # --- 2. QUẢN LÝ SỰ CỐ & BẢO TRÌ ---
+    elif page == "🔧 Quản lý sự cố & bảo trì":
+        st.title("🔧 Quản lý sự cố & Bảo trì phòng")
 
-    with tab_add:
-        rooms = get_rooms()
-        room_map = {row["Phòng"]: int(row["room_id"]) for _, row in rooms.iterrows()}
-        room_map["Chung / Khu vực công cộng"] = None
+        tab_report, tab_list = st.tabs(["🚨 Báo cáo sự cố mới", "📋 Danh sách sự cố"])
 
-        with st.form("maint_form"):
-            selected_loc = st.selectbox("Vị trí", list(room_map.keys()))
-            title = st.text_input("Tiêu đề sự cố *")
-            description = st.text_area("Mô tả chi tiết")
-            priority = st.selectbox("Mức độ ưu tiên", PRIORITIES, index=1)
-            assigned_to = st.text_input("Nhân viên xử lý", "Chưa phân công")
-            submit_maint = st.form_submit_button("🚀 Gửi báo cáo", use_container_width=True)
+        rooms_df = read_df("SELECT id, room_number FROM rooms")
+        room_map = {"Khu vực chung / Khác": None}
+        for _, r in rooms_df.iterrows():
+            room_map[f"Phòng {r['room_number']}"] = r["id"]
 
-        if submit_maint:
-            if not title.strip():
-                st.error("Vui lòng nhập tiêu đề sự cố.")
-            else:
-                room_id = room_map[selected_loc]
-                execute_sql(
-                    """
-                    INSERT INTO maintenance
-                    (room_id, title, description, priority, status, assigned_to, created_at)
-                    VALUES (:room_id, :title, :description, :priority, 'Mới', :assigned_to, :created_at)
-                    """,
-                    {
-                        "room_id": room_id,
-                        "title": title.strip(),
-                        "description": description,
-                        "priority": priority,
-                        "assigned_to": assigned_to,
-                        "created_at": datetime.now(),
-                    },
-                )
-                if room_id:
-                    execute_sql("UPDATE rooms SET status='Bảo trì' WHERE id=:id", {"id": room_id})
+        with tab_report:
+            with st.form("maint_form"):
+                selected_loc = st.selectbox("Vị trí", list(room_map.keys()))
+                title = st.text_input("Tiêu đề sự cố / yêu cầu *")
+                description = st.text_area("Mô tả chi tiết")
+                priority = st.selectbox("Mức độ ưu tiên", PRIORITIES, index=1)
+                assigned_to = st.text_input("Nhân viên xử lý", "Chưa phân công")
+                submit_maint = st.form_submit_button("🚨 Gửi báo cáo bảo trì", use_container_width=True)
 
-                log_action(user["username"], f"Tạo yêu cầu bảo trì: {title}")
-                st.success("✅ Đã ghi nhận yêu cầu bảo trì.")
-                st.rerun()
-
-    with tab_list:
-        maint_df = read_df(
-            """
-            SELECT
-                m.id AS `ID`,
-                COALESCE(CONCAT('P.', r.room_number), 'Khu vực chung') AS `Vị trí`,
-                m.title AS `Sự cố`,
-                m.priority AS `Ưu tiên`,
-                m.status AS `Trạng thái`,
-                m.assigned_to AS `Phụ trách`,
-                m.created_at AS `Thời gian tạo`
-            FROM maintenance m
-            LEFT JOIN rooms r ON r.id = m.room_id
-            ORDER BY m.id DESC
-            """
-        )
-        st.dataframe(maint_df, use_container_width=True, hide_index=True)
-
-
-# =========================================================
-# 8. BÁO CÁO DOANH THU
-# =========================================================
-
-elif page == "📊 Báo cáo doanh thu":
-    if not role_allowed("Quản trị viên", "Kế toán"):
-        st.error("🔒 Bạn không có quyền truy cập trang báo cáo doanh thu.")
-    else:
-        st.title("📊 Báo cáo doanh thu")
-
-        payments = read_df(
-            """
-            SELECT p.amount, p.paid_at, p.method, p.payment_type
-            FROM payments p
-            """
-        )
-
-        if payments.empty:
-            st.info("Chưa có dữ liệu thanh toán.")
-        else:
-            payments["paid_at"] = pd.to_datetime(payments["paid_at"])
-            total_rev = payments["amount"].sum()
-            st.metric("💰 Tổng doanh thu", money(total_rev))
-
-            st.divider()
-            st.subheader("📈 Doanh thu theo phương thức thanh toán")
-            by_method = payments.groupby("method")["amount"].sum().reset_index()
-            st.bar_chart(by_method.set_index("method"))
-
-
-# =========================================================
-# 9. CÔNG SUẤT PHÒNG
-# =========================================================
-
-elif page == "📈 Công suất phòng":
-    st.title("📈 Thống kê công suất phòng")
-
-    rooms = get_rooms()
-    total_rooms = len(rooms)
-    status_counts = rooms["Trạng thái"].value_counts()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Phân bổ trạng thái phòng")
-        st.dataframe(status_counts, use_container_width=True)
-    with col2:
-        st.subheader("Tỷ lệ phòng trống / có khách")
-        occupied = status_counts.get("Đang ở", 0)
-        st.metric("Tỷ lệ lấp đầy", f"{(occupied/total_rooms*100 if total_rooms else 0):.1f}%")
-
-
-# =========================================================
-import os
-from groq import Groq
-
-# =========================================================
-# =========================================================
-# 12. AI CHATBOX HOÀN TOÀN MIỄN PHÍ (Dùng Groq API)
-# =========================================================
-
-elif page == "💬 AI ChatBox":
-    st.title("🤖 HAPPY HOTEL - Trợ lý AI")
-    st.caption("Giải đáp thắc mắc khách sạn thông minh 24/7 (Sử dụng Groq AI Free)")
-
-    # Kiểm tra API Key
-    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY")
-
-    if not GROQ_API_KEY or GROQ_API_KEY == "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY":
-        st.warning("⚠️ Vui lòng cấu hình GROQ_API_KEY để sử dụng Chatbot AI!")
-        st.stop()
-        st.write("Chatbot đã sẵn sàng hoạt động!")
-        )
-    # 🔑 Lấy Groq API Key từ st.secrets hoặc điền trực tiếp
-    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY")
-
-    if not GROQ_API_KEY or GROQ_API_KEY == "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY":
-        st.warning("⚠️ Vui lòng cấu hình `GROQ_API_KEY` để bắt đầu chat!")
-        st.info("💡 Bạn có thể lấy API Key miễn phí tại: https://console.groq.com")
-        st.stop()
-
-    # Sửa lỗi SQL truy vấn giá phòng và phòng trống bằng DISTINCT
-    try:
-        df_rooms = read_df(
-            "SELECT DISTINCT room_type, price FROM rooms ORDER BY price ASC"
-        )
-        df_status = read_df(
-            "SELECT room_number, room_type, status FROM rooms"
-        )
-        df_rev = read_df(
-            "SELECT COALESCE(SUM(amount), 0) AS total FROM payments"
-        )
-
-        total_rev = df_rev["total"].iloc[0] if not df_rev.empty else 0
-
-        context_data = f"""
---- DỮ LIỆU THỰC TẾ KHÁCH SẠN HÔM NAY ---
-Bảng giá niêm yết:
-{df_rooms.to_string(index=False) if not df_rooms.empty else "Chưa có dữ liệu giá"}
-
-Tình trạng phòng:
-{df_status.to_string(index=False) if not df_status.empty else "Chưa có dữ liệu phòng"}
-
-Tổng doanh thu hiện tại: {total_rev:,.0f} VNĐ
-Quy định giờ giấc: Check-in từ 14:00, Check-out trước 12:00 trưa.
---- END DỮ LIỆU ---
-"""
-    except Exception as err:
-        context_data = f"Lỗi truy vấn dữ liệu: {err}"
-
-    # Prompt chỉ đạo phong cách trả lời cho AI
-    SYSTEM_PROMPT = f"""
-Bạn là Trợ lý AI thông minh, lịch sự và thân thiện của khách sạn HAPPY HOTEL 4*.
-Nhiệm vụ của bạn là hỗ trợ khách hàng và lễ tân giải đáp câu hỏi về giá phòng, tình trạng phòng, giờ giấc check-in/out, doanh thu,...
-
-Sử dụng dữ liệu thực tế sau đây để trả lời chính xác khi được hỏi:
-{context_data}
-
-Yêu cầu:
-- Trả lời ngắn gọn, rõ ràng, định dạng đẹp mắt bằng Markdown.
-- Thêm icon cảm xúc phù hợp.
-- Nếu người dùng hỏi điều gì không có trong dữ liệu, hãy trả lời lịch sự dựa trên kiến thức chung của khách sạn 4 sao.
-"""
-
-    # Khởi tạo lịch sử chat trong Session State
-    if "ai_messages" not in st.session_state:
-        st.session_state.ai_messages = [
-            {"role": "assistant", "content": "👋 Xin chào! Tôi là Trợ lý AI của HAPPY HOTEL. Tôi có thể giúp gì cho bạn hôm nay?"}
-        ]
-
-    # Hiển thị lịch sử chat
-    for msg in st.session_state.ai_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    # Nhập tin nhắn từ người dùng
-    user_input = st.chat_input("Nhập câu hỏi của bạn (ví dụ: Giá phòng VIP bao nhiêu?)...")
-
-    if user_input:
-        st.session_state.ai_messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
-
-        with st.chat_message("assistant"):
-            with st.spinner("AI đang xử lý..."):
-                try:
-                    from groq import Groq
-                    client = Groq(api_key=GROQ_API_KEY)
-
-                    api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-                    for m in st.session_state.ai_messages:
-                        api_messages.append({"role": m["role"], "content": m["content"]})
-
-                    completion = client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=api_messages,
-                        temperature=0.4,
-                        max_tokens=1024,
+            if submit_maint:
+                if not title.strip():
+                    st.error("Vui lòng nhập tiêu đề sự cố.")
+                else:
+                    room_id = room_map[selected_loc]
+                    execute_sql(
+                        """
+                        INSERT INTO maintenance (room_id, title, description, priority, status, assigned_to, created_at)
+                        VALUES (:room_id, :title, :description, :priority, 'Mới', :assigned_to, :created_at)
+                        """,
+                        {
+                            "room_id": room_id,
+                            "title": title.strip(),
+                            "description": description,
+                            "priority": priority,
+                            "assigned_to": assigned_to,
+                            "created_at": datetime.now(),
+                        },
                     )
+                    if room_id:
+                        execute_sql("UPDATE rooms SET status='Bảo trì' WHERE id=:id", {"id": room_id})
 
-                    ai_response = completion.choices[0].message.content
-                    st.markdown(ai_response)
-                    st.session_state.ai_messages.append({"role": "assistant", "content": ai_response})
-
-                except Exception as e:
-                    st.error(f"❌ Lỗi khi kết nối AI: {e}")
-
-   
-
-   
-
-
-
-
-# =========================================================
-# 11. PHÂN QUYỀN NHÂN VIÊN (Chỉ Quản trị viên)
-# =========================================================
-
-elif page == "👨‍💼 Phân quyền nhân viên":
-    if not role_allowed("Quản trị viên"):
-        st.error("🔒 Bạn không có quyền truy cập trang này.")
-    else:
-        st.title("👨‍💼 Quản lý tài khoản & phân quyền")
-
-        tab_list, tab_add = st.tabs(["📋 Danh sách nhân viên", "➕ Thêm nhân viên"])
+                    log_action(user["username"], f"Báo cáo sự cố bảo trì: {title}")
+                    st.success("✅ Đã gửi báo cáo bảo trì thành công!")
+                    st.rerun()
 
         with tab_list:
-            emp_df = read_df(
+            maint_df = read_df(
                 """
-                SELECT id AS `ID`, full_name AS `Họ tên`, username AS `Tài khoản`,
-                       role AS `Vai trò`, phone AS `SĐT`, active AS `Hoạt động`
-                FROM employees
-                ORDER BY id DESC
+                SELECT 
+                    m.id AS `ID`,
+                    COALESCE(CONCAT('P.', r.room_number), 'Khu vực chung') AS `Vị trí`,
+                    m.title AS `Sự cố`,
+                    m.description AS `Mô tả`,
+                    m.priority AS `Ưu tiên`,
+                    m.status AS `Trạng thái`,
+                    m.assigned_to AS `Xử lý bởi`,
+                    m.created_at AS `Thời gian tạo`
+                FROM maintenance m
+                LEFT JOIN rooms r ON r.id = m.room_id
+                ORDER BY m.id DESC
                 """
             )
-            st.dataframe(emp_df, use_container_width=True, hide_index=True)
+            st.dataframe(maint_df, use_container_width=True, hide_index=True)
 
-        with tab_add:
-            with st.form("new_emp_form"):
-                name = st.text_input("Họ và tên *")
-                uname = st.text_input("Tên đăng nhập *")
-                pwd = st.text_input("Mật khẩu *", type="password")
-                role = st.selectbox("Vai trò", ROLES)
-                phone = st.text_input("Số điện thoại")
-                submit_emp = st.form_submit_button("💾 Tạo nhân viên", use_container_width=True)
+            if not maint_df.empty:
+                st.divider()
+                st.subheader("🔄 Cập nhật tiến độ bảo trì")
+                m_id = st.selectbox("Chọn mã sự cố", maint_df["ID"].tolist())
+                m_status = st.selectbox("Trạng thái mới", MAINTENANCE_STATUSES)
+                
+                if st.button("💾 Cập nhật bảo trì"):
+                    completed_at = datetime.now() if m_status == "Hoàn thành" else None
+                    execute_sql(
+                        """
+                        UPDATE maintenance 
+                        SET status=:status, completed_at=:completed_at 
+                        WHERE id=:id
+                        """,
+                        {"status": m_status, "completed_at": completed_at, "id": int(m_id)},
+                    )
+                    
+                    target_room = read_df("SELECT room_id FROM maintenance WHERE id=:id", {"id": int(m_id)})
+                    if not target_room.empty and target_room.iloc[0]["room_id"] and m_status == "Hoàn thành":
+                        execute_sql("UPDATE rooms SET status='Trống' WHERE id=:id", {"id": int(target_room.iloc[0]["room_id"])})
 
-            if submit_emp:
-                if not name.strip() or not uname.strip() or not pwd.strip():
-                    st.error("Vui lòng điền đầy đủ các trường bắt buộc (*).")
-                else:
-                    try:
-                        execute_sql(
-                            """
-                            INSERT INTO employees (full_name, username, password, role, phone, active, created_at)
-                            VALUES (:name, :uname, :pwd, :role, :phone, 1, :created)
-                            """,
-                            {
-                                "name": name.strip(),
-                                "uname": uname.strip(),
-                                "pwd": pwd,
-                                "role": role,
-                                "phone": phone,
-                                "created": datetime.now(),
-                            },
-                        )
-                        log_action(user["username"], f"Thêm nhân viên {uname}")
-                        st.success("✅ Tạo tài khoản nhân viên thành công!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Lỗi: Có thể tên đăng nhập đã tồn tại.\n{e}")
+                    log_action(user["username"], f"Cập nhật sự cố #{m_id} -> {m_status}")
+                    st.success("✅ Đã cập nhật trạng thái sự cố.")
+                    st.rerun()
+
+    # --- 3. BÁO CÁO DOANH THU ---
+    elif page == "📊 Báo cáo doanh thu":
+        st.title("📊 Báo cáo doanh thu")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            start_date = st.date_input("Từ ngày", date.today() - timedelta(days=30))
+        with c2:
+            end_date = st.date_input("Đến ngày", date.today())
+
+        df_rev = read_df(
+            """
+            SELECT 
+                DATE(paid_at) AS `Ngày`,
+                SUM(amount) AS `Doanh thu`,
+                COUNT(id) AS `Số giao dịch`
+            FROM payments
+            WHERE DATE(paid_at) BETWEEN :start AND :end
+            GROUP BY DATE(paid_at)
+            ORDER BY Ngày ASC
+            """,
+            {"start": start_date, "end": end_date},
+        )
+
+        if df_rev.empty:
+            st.info("Chưa có dữ liệu thanh toán phát sinh trong khoảng thời gian này.")
+        else:
+            total_rev = df_rev["Doanh thu"].sum()
+            st.metric("💸 Tổng doanh thu", money(total_rev))
+            st.line_chart(df_rev.set_index("Ngày")["Doanh thu"])
+            st.dataframe(df_rev, use_container_width=True, hide_index=True)
+
+    # --- 4. CÔNG SUẤT PHÒNG ---
+    elif page == "📈 Công suất phòng":
+        st.title("📈 Thống kê công suất phòng")
+
+        rooms = get_rooms()
+        status_counts = rooms["Trạng thái"].value_counts().reset_index()
+        status_counts.columns = ["Trạng thái", "Số lượng"]
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("📊 Phân bố trạng thái phòng")
+            st.dataframe(status_counts, use_container_width=True, hide_index=True)
+        with col2:
+            st.bar_chart(status_counts.set_index("Trạng thái"))
+
+    # --- 5. CHATBOX / BÌNH LUẬN ---
+    elif page == "💬 Chatbox / Bình luận":
+        st.title("💬 Kênh trao đổi nội bộ")
+
+        messages = read_df(
+            """
+            SELECT display_name AS `Người gửi`, message AS `Nội dung`, created_at AS `Thời gian`
+            FROM chat_messages
+            ORDER BY id DESC
+            LIMIT 50
+            """
+        )
+
+        for _, msg in messages.iloc[::-1].iterrows():
+            with st.chat_message("user"):
+                st.write(f"**{msg['Người gửi']}** *({msg['Thời gian']})*")
+                st.write(msg["Nội dung"])
+
+        if prompt := st.chat_input("Nhập tin nhắn nội bộ..."):
+            execute_sql(
+                """
+                INSERT INTO chat_messages (username, display_name, message, created_at)
+                VALUES (:username, :display_name, :message, :created_at)
+                """,
+                {
+                    "username": user["username"],
+                    "display_name": user["full_name"],
+                    "message": prompt,
+                    "created_at": datetime.now(),
+                },
+            )
+            st.rerun()
+
+    # --- 6. PHÂN QUYỀN NHÂN VIÊN ---
+    elif page == "👨‍💼 Phân quyền nhân viên":
+        if not role_allowed("Quản trị viên"):
+            st.error("⛔ Bạn không có quyền truy cập chức năng này.")
+        else:
+            st.title("👨‍💼 Quản lý nhân viên & Phân quyền")
+
+            tab_list_emp, tab_add_emp = st.tabs(["📋 Danh sách nhân viên", "➕ Thêm nhân viên"])
+
+            with tab_add_emp:
+                with st.form("add_employee_form"):
+                    emp_name = st.text_input("Họ tên nhân viên *")
+                    emp_user = st.text_input("Tên tài khoản *")
+                    emp_pass = st.text_input("Mật khẩu *", type="password")
+                    emp_role = st.selectbox("Chức vụ / Vai trò", ROLES)
+                    emp_phone = st.text_input("Số điện thoại")
+                    emp_submit = st.form_submit_button("💾 Lưu nhân viên", use_container_width=True)
+
+                if emp_submit:
+                    if not emp_name or not emp_user or not emp_pass:
+                        st.error("Vui lòng điền đầy đủ thông tin bắt buộc.")
+                    else:
+                        try:
+                            execute_sql(
+                                """
+                                INSERT INTO employees (full_name, username, password, role, phone, active, created_at)
+                                VALUES (:name, :username, :password, :role, :phone, 1, :created_at)
+                                """,
+                                {
+                                    "name": emp_name.strip(),
+                                    "username": emp_user.strip(),
+                                    "password": emp_pass.strip(),
+                                    "role": emp_role,
+                                    "phone": emp_phone,
+                                    "created_at": datetime.now(),
+                                },
+                            )
+                            log_action(user["username"], f"Thêm nhân viên mới {emp_user}")
+                            st.success("✅ Thêm nhân viên thành công!")
+                            st.rerun()
+                        except Exception as err:
+                            st.error("Lỗi khi thêm nhân viên (Tên tài khoản có thể đã tồn tại).")
+
+            with tab_list_emp:
+                emp_df = read_df(
+                    """
+                    SELECT id AS `ID`, full_name AS `Họ tên`, username AS `Tài khoản`, role AS `Chức vụ`, phone AS `SĐT`, active AS `Kích hoạt`
+                    FROM employees
+                    ORDER BY id ASC
+                    """
+                )
+                st.dataframe(emp_df, use_container_width=True, hide_index=True)
+
+# =========================================================
+# 5. ĐIỂM KHỞI CHẠY CHƯƠNG TRÌNH
+# =========================================================
+if __name__ == "__main__":
+    main()
