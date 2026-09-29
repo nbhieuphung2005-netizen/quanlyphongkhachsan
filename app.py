@@ -1048,6 +1048,14 @@ elif page == "💬 AI ChatBox":
     st.title("🤖 HAPPY HOTEL - Trợ lý AI")
     st.caption("Giải đáp thắc mắc khách sạn thông minh 24/7 (Sử dụng Groq AI Free)")
 
+    # Kiểm tra API Key
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY")
+
+    if not GROQ_API_KEY or GROQ_API_KEY == "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY":
+        st.warning("⚠️ Vui lòng cấu hình GROQ_API_KEY để sử dụng Chatbot AI!")
+        st.stop()
+
+    st.write("Chatbot đã sẵn sàng hoạt động!")
     # 🔑 Lấy Groq API Key từ st.secrets hoặc điền trực tiếp
     GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY")
 
