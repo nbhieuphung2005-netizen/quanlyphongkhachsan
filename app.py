@@ -532,7 +532,7 @@ def main():
             )
             st.rerun()
 
-    # --- 6. TRỢ LÝ AI GEMINI HỆN ĐẠI ---
+    # --- 6. TRỢ LÝ AI GEMINI HỆN ĐẠI ---
     elif page == "🤖 Trợ lý AI Gemini":
         st.title("🤖 Trợ lý AI Thông Minh (Google Gemini)")
         st.caption(
@@ -627,6 +627,23 @@ def main():
                 ["📋 Danh sách nhân viên", "➕ Thêm nhân viên"]
             )
 
+            with tab_list_emp:
+                emp_df = read_df(
+                    """
+                    SELECT 
+                        id AS `ID`,
+                        full_name AS `Họ và tên`,
+                        username AS `Tài khoản`,
+                        role AS `Chức vụ`,
+                        phone AS `Số điện thoại`,
+                        CASE WHEN active = 1 THEN 'Hoạt động' ELSE 'Khóa' END AS `Trạng thái`,
+                        created_at AS `Ngày tạo`
+                    FROM employees
+                    ORDER BY id DESC
+                    """
+                )
+                st.dataframe(emp_df, use_container_width=True, hide_index=True)
+
             with tab_add_emp:
                 with st.form("add_employee_form"):
                     emp_name = st.text_input(
@@ -669,28 +686,15 @@ def main():
                             )
                             log_action(
                                 user["username"],
-                                f"Thêm nhân viên mới {emp_user}",
+                                f"Thêm nhân viên mới: {emp_user.strip()}",
                             )
                             st.success("✅ Thêm nhân viên thành công!")
                             st.rerun()
-                        except Exception:
-                            st.error(
-                                "Lỗi khi thêm nhân viên (Tên tài khoản có thể đã tồn tại)."
-                            )
-
-            with tab_list_emp:
-                emp_df = read_df(
-                    """
-                    SELECT id AS `ID`, full_name AS `Họ tên`, username AS `Tài khoản`, role AS `Chức vụ`, phone AS `SĐT`, active AS `Kích hoạt`
-                    FROM employees
-                    ORDER BY id ASC
-                    """
-                )
-                st.dataframe(emp_df, use_container_width=True, hide_index=True)
+                        except sqlite3.IntegrityError:
+                            st.error("❌ Tên tài khoản đã tồn tại trên hệ thống!")
+                        except Exception as e:
+                            st.error(f"❌ Có lỗi xảy ra: {e}")
 
 
-# =========================================================
-# 5. ĐIỂM KHỞI CHẠY CHƯƠNG TRÌNH
-# =========================================================
 if __name__ == "__main__":
     main()
