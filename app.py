@@ -539,6 +539,28 @@ def main():
             st.rerun()
 
     # --- 6. TRỢ LÝ AI GEMINI HỆN ĐẠI ---
+    with st.sidebar:
+            st.markdown("---")
+            st.subheader("⚙️ Cấu hình Gemini AI")
+            gemini_key = st.text_input(
+                "Google Gemini API Key:",
+                value=default_api_key,
+                type="password",
+                key="gemini_api_key_sidebar_input",
+            )
+            ai_model = st.selectbox(
+                "Chọn mô hình AI:",
+                ["gemini-3.8-flash", "gemini-2.5-pro"],
+                key="gemini_model_select_box",
+            )
+
+            if st.button(
+                "🗑️ Xóa lịch sử Chat AI",
+                use_container_width=True,
+                key="btn_clear_ai_history",
+            ):
+                st.session_state["ai_messages"] = []
+                st.rerun()
     elif page == "🤖 Trợ lý AI Gemini":
         st.title("🤖 Trợ lý AI Thông Minh (Google Gemini)")
         st.caption(
