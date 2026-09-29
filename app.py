@@ -599,10 +599,10 @@ def main():
             ai_model = st.selectbox(
                 "Chọn mô hình AI:",
                 [
-               "meta-llama/llama-3.3-70b-instruct:free",
-               "google/gemini-2.0-flash-lite-001",
+               "openrouter/free",
+               "google/gemma-4-31b-it:free",
+               "qwen/qwen3.8-27b:free",
                "openai/gpt-4o-mini",
-               "deepseek/deepseek-r1:free",
                 ],
                 key="openrouter_model_select_box",
             )
