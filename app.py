@@ -303,8 +303,11 @@ def main():
 
     # --- 2. QUẢN LÝ SỰ CỐ & BẢO TRÌ ---
     elif page == "🔧 Quản lý sự cố & bảo trì":
-        ai_model = st.selectbox("Chọn mô hình AI:", ["gemini-2.5-flash", "gemini-2.5-pro"], key="gemini_model_select_box")
-
+        ai_model = st.selectbox(
+    "Chọn mô hình AI:",
+    ["gemini-2.5-flash", "gemini-2.5-pro"],
+    key="gemini_model_select_box",
+)
         tab_report, tab_list = st.tabs(
             ["🚨 Báo cáo sự cố mới", "📋 Danh sách sự cố"]
         )
