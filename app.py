@@ -561,11 +561,7 @@ def main():
             ):
                 st.session_state["ai_messages"] = []
                 st.rerun()
-    elif page == "🤖 Trợ lý AI Gemini":
-        st.title("🤖 Trợ lý AI Thông Minh (Google Gemini)")
-        st.caption(
-            "Hỗ trợ giải đáp nghiệp vụ khách sạn, soạn tin phản hồi và tư vấn nhanh."
-        )
+    
 
         # Lấy API key từ Secrets nếu có
         default_api_key = st.secrets.get("GEMINI_API_KEY", "")
