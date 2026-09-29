@@ -303,7 +303,7 @@ def main():
 
     # --- 2. QUẢN LÝ SỰ CỐ & BẢO TRÌ ---
     elif page == "🔧 Quản lý sự cố & bảo trì":
-        st.title("🔧 Quản lý sự cố & Bảo trì phòng")
+        ai_model = st.selectbox("Chọn mô hình AI:", ["gemini-2.5-flash", "gemini-2.5-pro"], key="gemini_model_select_box")
 
         tab_report, tab_list = st.tabs(
             ["🚨 Báo cáo sự cố mới", "📋 Danh sách sự cố"]
@@ -339,7 +339,10 @@ def main():
                     key="maint_assign_input",
                 )
                 submit_maint = st.form_submit_button(
-                    "🚨 Gửi báo cáo bảo trì", use_container_width=True
+                    response = client.models.generate_content(
+    model=ai_model,  # Hoặc ghi rõ: model="gemini-2.5-flash"
+    contents=contents
+)
                 )
 
             if submit_maint:
