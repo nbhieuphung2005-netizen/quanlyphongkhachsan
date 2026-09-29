@@ -1036,91 +1036,103 @@ elif page == "📈 Công suất phòng":
 
 
 # =========================================================
-# 10. CHATBOX / BÌNH LUẬN (AI ASSISTANT)
+import os
+from groq import Groq
+
+# =========================================================
+# 12. AI CHATBOX HOÀN TOÀN MIỄN PHÍ (Dùng Groq API)
 # =========================================================
 
-elif page == "💬 Chatbox / Bình luận":
-    st.subheader("💬 HAPPY HOTEL AI Assistant")
-    st.caption("Trợ lý ảo hỗ trợ khách hàng và lễ tân 24/7")
+elif page == "💬 AI ChatBox":
+    st.title("🤖 HAPPY HOTEL - Trợ lý AI")
+    st.caption("Giải đáp thắc mắc khách sạn thông minh 24/7 (Sử dụng Groq AI Free)")
 
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content": (
-                    "👋 Xin chào! Tôi là trợ lý của HAPPY HOTEL. "
-                    "Tôi có thể giúp bạn xem giá phòng, phòng trống, "
-                    "giờ check-in/check-out và doanh thu."
-                ),
-            }
+    # 🔑 Điền Groq API Key của bạn vào đây (hoặc lưu trong st.secrets / Biến môi trường)
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY")
+
+    if not GROQ_API_KEY or GROQ_API_KEY == "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY":
+        st.warning("⚠️ Vui lòng cấu hình `GROQ_API_KEY` trong mã nguồn hoặc Secrets để bắt đầu chat!")
+        st.info("💡 Bạn có thể lấy API Key miễn phí tại: https://console.groq.com")
+        st.stop()
+
+    # Lấy dữ liệu ngữ cảnh thực tế từ MySQL Aiven để đưa vào cho AI
+    try:
+        df_rooms = read_df("SELECT room_number, room_type, price, status FROM rooms")
+        df_rev = read_df("SELECT SUM(amount) AS total FROM payments")
+
+        context_data = f"""
+--- DỮ LIỆU THỰC TẾ KHÁCH SẠN HÔM NAY ---
+Bảng giá & Danh sách phòng:
+{df_rooms.to_string(index=False) if not df_rooms.empty else "Chưa có dữ liệu phòng"}
+
+Tổng doanh thu hiện tại: {df_rev['total'].iloc[0] if not df_rev.empty and df_rev['total'].iloc[0] else 0} VNĐ
+Quy định giờ giấc: Check-in từ 14:00, Check-out trước 12:00 trưa.
+--- END DỮ LIỆU ---
+"""
+    except Exception:
+        context_data = "Không thể kết nối lấy dữ liệu phòng thực tế."
+
+    # Prompt chỉ đạo phong cách trả lời cho AI
+    SYSTEM_PROMPT = f"""
+Bạn là Trợ lý AI thông minh, lịch sự và thân thiện của khách sạn HAPPY HOTEL 4*.
+Nhiệm vụ của bạn là hỗ trợ khách hàng và lễ tân giải đáp câu hỏi về giá phòng, tình trạng phòng, giờ giấc check-in/out, doanh thu,...
+
+Sử dụng dữ liệu thực tế sau đây để trả lời chính xác khi được hỏi:
+{context_data}
+
+Yêu cầu:
+- Trả lời ngắn gọn, rõ ràng, định dạng đẹp mắt bằng Markdown.
+- Thêm icon cảm xúc phù hợp.
+- Nếu người dùng hỏi điều gì không có trong dữ liệu, hãy trả lời lịch sự dựa trên kiến thức chung của khách sạn 4 sao.
+"""
+
+    # Khởi tạo lịch sử chat trong Session State
+    if "ai_messages" not in st.session_state:
+        st.session_state.ai_messages = [
+            {"role": "assistant", "content": "👋 Xin chào! Tôi là Trợ lý AI của HAPPY HOTEL. Tôi có thể giúp gì cho bạn hôm nay?"}
         ]
 
-    for msg in st.session_state.messages:
+    # Hiển thị lịch sử chat
+    for msg in st.session_state.ai_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    prompt = st.chat_input("Nhập câu hỏi của bạn...")
+    # Nhập tin nhắn từ người dùng
+    user_input = st.chat_input("Nhập câu hỏi của bạn (ví dụ: Giá phòng Standard bao nhiêu? còn phòng trống không?)...")
 
-    if prompt:
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    if user_input:
+        # Thêm câu hỏi người dùng
+        st.session_state.ai_messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(user_input)
 
-        text = prompt.lower().strip()
-        reply = ""
-
-        # Xử lý các kịch bản câu hỏi AI
-        if any(keyword in text for keyword in ["giá", "price", "bao nhiêu tiền", "bảng giá"]):
-            prices_df = read_df(
-                "SELECT room_type, price FROM rooms GROUP BY room_type, price ORDER BY price ASC"
-            )
-            if prices_df.empty:
-                reply = "Hiện chưa có thông tin giá phòng trong hệ thống."
-            else:
-                reply = "### 💵 Bảng giá phòng niêm yết\n"
-                for _, row in prices_df.iterrows():
-                    reply += f"- **{row['room_type']}**: {money(row['price'])}/đêm\n"
-
-        elif any(keyword in text for keyword in ["trống", "còn phòng", "available"]):
-            empty_rooms = read_df(
-                "SELECT room_number, room_type, price FROM rooms WHERE status='Trống' ORDER BY floor, room_number"
-            )
-            if empty_rooms.empty:
-                reply = "❌ Hiện tại tất cả các phòng đều đang có khách hoặc đã được đặt."
-            else:
-                reply = f"### 🚪 Danh sách phòng trống hiện tại ({len(empty_rooms)} phòng)\n"
-                for _, row in empty_rooms.iterrows():
-                    reply += f"- **Phòng {row['room_number']}** ({row['room_type']}) — {money(row['price'])}/đêm\n"
-
-        elif any(keyword in text for keyword in ["check in", "check-in", "check out", "check-out", "giờ nhận phòng", "giờ trả phòng"]):
-            reply = (
-                "### ⏰ Quy định giờ giấc tại HAPPY HOTEL\n"
-                "- **Giờ Check-in (Nhận phòng):** Sau `14:00` hàng ngày.\n"
-                "- **Giờ Check-out (Trả phòng):** Trước `12:00` trưa hàng ngày.\n"
-                "_Lưu ý: Quý khách có nhu cầu nhận phòng sớm hoặc trả phòng trễ vui lòng liên hệ trực tiếp Quầy Lễ tân._"
-            )
-
-        elif any(keyword in text for keyword in ["doanh thu", "revenue", "tiền thu"]):
-            if role_allowed("Quản trị viên", "Kế toán"):
-                total_rev = read_df("SELECT COALESCE(SUM(amount), 0) AS total FROM payments").iloc[0]["total"]
-                reply = f"📊 **Tổng doanh thu thực thu hiện tại:** `{money(total_rev)}`"
-            else:
-                reply = "🔒 Bạn không có quyền truy cập thông tin doanh thu của khách sạn."
-
-        else:
-            reply = (
-                "Xin lỗi, tôi chưa hiểu rõ yêu cầu của bạn. "
-                "Bạn có thể hỏi về:\n"
-                "- **Giá phòng** (ví dụ: *'Giá phòng bao nhiêu?'*)\n"
-                "- **Phòng trống** (ví dụ: *'Còn phòng trống không?'*)\n"
-                "- **Giờ nhận/trả phòng** (ví dụ: *'Mấy giờ check-in?'*)\n"
-                "- **Doanh thu** *(dành cho Admin/Kế toán)*"
-            )
-
-        st.session_state.messages.append({"role": "assistant", "content": reply})
+        # Gọi Groq API xử lý
         with st.chat_message("assistant"):
-            st.markdown(reply)
+            with st.spinner("AI đang suy nghĩ..."):
+                try:
+                    client = Groq(api_key=GROQ_API_KEY)
 
+                    # Chuẩn bị lịch sử trò chuyện gửi lên AI
+                    api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                    for m in st.session_state.ai_messages:
+                        api_messages.append({"role": m["role"], "content": m["content"]})
+
+                    # Gửi request đến model Llama 3
+                    completion = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=api_messages,
+                        temperature=0.5,
+                        max_tokens=1024,
+                    )
+
+                    ai_response = completion.choices[0].message.content
+                    st.markdown(ai_response)
+
+                    # Lưu câu trả lời vào lịch sử
+                    st.session_state.ai_messages.append({"role": "assistant", "content": ai_response})
+
+                except Exception as e:
+                    st.error(f"❌ Lỗi khi gọi AI: {e}")
 
 # =========================================================
 # 11. PHÂN QUYỀN NHÂN VIÊN (Chỉ Quản trị viên)
