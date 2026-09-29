@@ -1040,6 +1040,7 @@ import os
 from groq import Groq
 
 # =========================================================
+# =========================================================
 # 12. AI CHATBOX HOÀN TOÀN MIỄN PHÍ (Dùng Groq API)
 # =========================================================
 
@@ -1047,30 +1048,42 @@ elif page == "💬 AI ChatBox":
     st.title("🤖 HAPPY HOTEL - Trợ lý AI")
     st.caption("Giải đáp thắc mắc khách sạn thông minh 24/7 (Sử dụng Groq AI Free)")
 
-    # 🔑 Điền Groq API Key của bạn vào đây (hoặc lưu trong st.secrets / Biến môi trường)
+    # 🔑 Lấy Groq API Key từ st.secrets hoặc điền trực tiếp
     GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY")
 
     if not GROQ_API_KEY or GROQ_API_KEY == "SỐ_KEY_GROQ_CỦA_BẠN_Ở_ĐÂY":
-        st.warning("⚠️ Vui lòng cấu hình `GROQ_API_KEY` trong mã nguồn hoặc Secrets để bắt đầu chat!")
+        st.warning("⚠️ Vui lòng cấu hình `GROQ_API_KEY` để bắt đầu chat!")
         st.info("💡 Bạn có thể lấy API Key miễn phí tại: https://console.groq.com")
         st.stop()
 
-    # Lấy dữ liệu ngữ cảnh thực tế từ MySQL Aiven để đưa vào cho AI
+    # Sửa lỗi SQL truy vấn giá phòng và phòng trống bằng DISTINCT
     try:
-        df_rooms = read_df("SELECT room_number, room_type, price, status FROM rooms")
-        df_rev = read_df("SELECT SUM(amount) AS total FROM payments")
+        df_rooms = read_df(
+            "SELECT DISTINCT room_type, price FROM rooms ORDER BY price ASC"
+        )
+        df_status = read_df(
+            "SELECT room_number, room_type, status FROM rooms"
+        )
+        df_rev = read_df(
+            "SELECT COALESCE(SUM(amount), 0) AS total FROM payments"
+        )
+
+        total_rev = df_rev["total"].iloc[0] if not df_rev.empty else 0
 
         context_data = f"""
 --- DỮ LIỆU THỰC TẾ KHÁCH SẠN HÔM NAY ---
-Bảng giá & Danh sách phòng:
-{df_rooms.to_string(index=False) if not df_rooms.empty else "Chưa có dữ liệu phòng"}
+Bảng giá niêm yết:
+{df_rooms.to_string(index=False) if not df_rooms.empty else "Chưa có dữ liệu giá"}
 
-Tổng doanh thu hiện tại: {df_rev['total'].iloc[0] if not df_rev.empty and df_rev['total'].iloc[0] else 0} VNĐ
+Tình trạng phòng:
+{df_status.to_string(index=False) if not df_status.empty else "Chưa có dữ liệu phòng"}
+
+Tổng doanh thu hiện tại: {total_rev:,.0f} VNĐ
 Quy định giờ giấc: Check-in từ 14:00, Check-out trước 12:00 trưa.
 --- END DỮ LIỆU ---
 """
-    except Exception:
-        context_data = "Không thể kết nối lấy dữ liệu phòng thực tế."
+    except Exception as err:
+        context_data = f"Lỗi truy vấn dữ liệu: {err}"
 
     # Prompt chỉ đạo phong cách trả lời cho AI
     SYSTEM_PROMPT = f"""
@@ -1098,41 +1111,43 @@ Yêu cầu:
             st.markdown(msg["content"])
 
     # Nhập tin nhắn từ người dùng
-    user_input = st.chat_input("Nhập câu hỏi của bạn (ví dụ: Giá phòng Standard bao nhiêu? còn phòng trống không?)...")
+    user_input = st.chat_input("Nhập câu hỏi của bạn (ví dụ: Giá phòng VIP bao nhiêu?)...")
 
     if user_input:
-        # Thêm câu hỏi người dùng
         st.session_state.ai_messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        # Gọi Groq API xử lý
         with st.chat_message("assistant"):
-            with st.spinner("AI đang suy nghĩ..."):
+            with st.spinner("AI đang xử lý..."):
                 try:
+                    from groq import Groq
                     client = Groq(api_key=GROQ_API_KEY)
 
-                    # Chuẩn bị lịch sử trò chuyện gửi lên AI
                     api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
                     for m in st.session_state.ai_messages:
                         api_messages.append({"role": m["role"], "content": m["content"]})
 
-                    # Gửi request đến model Llama 3
                     completion = client.chat.completions.create(
                         model="llama-3.3-70b-versatile",
                         messages=api_messages,
-                        temperature=0.5,
+                        temperature=0.4,
                         max_tokens=1024,
                     )
 
                     ai_response = completion.choices[0].message.content
                     st.markdown(ai_response)
-
-                    # Lưu câu trả lời vào lịch sử
                     st.session_state.ai_messages.append({"role": "assistant", "content": ai_response})
 
                 except Exception as e:
-                    st.error(f"❌ Lỗi khi gọi AI: {e}")
+                    st.error(f"❌ Lỗi khi kết nối AI: {e}")
+
+   
+
+   
+
+
+
 
 # =========================================================
 # 11. PHÂN QUYỀN NHÂN VIÊN (Chỉ Quản trị viên)
