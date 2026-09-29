@@ -1,9 +1,8 @@
 import sqlite3
 from datetime import date, datetime, timedelta
+import openai
 import pandas as pd
 import streamlit as st
-from google import genai
-from google.genai import types
 
 # =========================================================
 # 1. CẤU HÌNH TRANG & BIẾN HẰNG SỐ
@@ -105,7 +104,6 @@ def init_db():
     )
     """)
 
-    # Khởi tạo dữ liệu mẫu nếu DB trống
     cursor.execute("SELECT COUNT(*) FROM employees")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
@@ -239,7 +237,7 @@ def main():
         "📊 Báo cáo doanh thu",
         "📈 Công suất phòng",
         "💬 Chatbox / Bình luận",
-        "🤖 Trợ lý AI Gemini",
+        "🌐 Trợ lý AI OpenRouter",
         "👨‍💼 Phân quyền nhân viên",
     ]
 
@@ -277,7 +275,6 @@ def main():
 
         st.divider()
 
-        # Hiển thị trực quan dạng Grid/Card
         status_colors = {
             "Trống": "#28a745",
             "Đang ở": "#dc3545",
@@ -448,7 +445,7 @@ def main():
                     )
 
                 with c_btn:
-                    st.write("")  # Căn lề nút bấm
+                    st.write("")
                     st.write("")
                     if st.button(
                         "💾 Cập nhật",
@@ -584,25 +581,30 @@ def main():
             )
             st.rerun()
 
-    # --- 6. TRỢ LÝ AI GEMINI ---
-    elif page == "🤖 Trợ lý AI Gemini":
-        st.title("🤖 Trợ lý AI Gemini")
+    # --- 6. TRỢ LÝ AI OPENROUTER ---
+    elif page == "🌐 Trợ lý AI OpenRouter":
+        st.title("🌐 Trợ lý AI OpenRouter")
 
-        default_api_key = st.secrets.get("GEMINI_API_KEY", "")
+        default_api_key = st.secrets.get("OPENROUTER_API_KEY", "")
 
         with st.sidebar:
             st.markdown("---")
-            st.subheader("⚙️ Cấu hình Gemini AI")
-            gemini_key = st.text_input(
-                "Google Gemini API Key:",
+            st.subheader("⚙️ Cấu hình OpenRouter")
+            openrouter_key = st.text_input(
+                "OpenRouter API Key (sk-or-v1-...):",
                 value=default_api_key,
                 type="password",
-                key="gemini_api_key_sidebar_input",
+                key="openrouter_api_key_sidebar_input",
             )
             ai_model = st.selectbox(
                 "Chọn mô hình AI:",
-                ["gemini-2.5-flash", "gemini-2.5-pro"],
-                key="gemini_model_select_box",
+                [
+                    "google/gemini-2.0-flash-001",
+                    "meta-llama/llama-3.3-70b-instruct",
+                    "openai/gpt-4o-mini",
+                    "deepseek/deepseek-r1",
+                ],
+                key="openrouter_model_select_box",
             )
 
             if st.button(
@@ -619,11 +621,11 @@ def main():
                 st.markdown(msg["content"])
 
         if user_prompt := st.chat_input(
-            "Hỏi Trợ lý AI Gemini...", key="gemini_chat_input"
+            "Hỏi Trợ lý AI...", key="openrouter_chat_input"
         ):
-            if not gemini_key:
+            if not openrouter_key:
                 st.error(
-                    "⚠️ Vui lòng nhập Gemini API Key ở Sidebar góc trái!"
+                    "⚠️ Vui lòng nhập OpenRouter API Key (bắt đầu bằng sk-or-v1-...) ở Sidebar góc trái!"
                 )
             else:
                 st.session_state["ai_messages"].append(
@@ -634,26 +636,32 @@ def main():
 
                 with st.chat_message("assistant"):
                     status_placeholder = st.empty()
-                    status_placeholder.markdown("🔄 *AI đang suy nghĩ...*")
+                    status_placeholder.markdown("🔄 *AI đang kết nối OpenRouter...*")
 
                     try:
-                        client = genai.Client(api_key=gemini_key)
-
-                        contents = []
-                        for m in st.session_state["ai_messages"]:
-                            role = "user" if m["role"] == "user" else "model"
-                            contents.append(
-                                types.Content(
-                                    role=role,
-                                    parts=[types.Part.from_text(text=m["content"])],
-                                )
-                            )
-
-                        response = client.models.generate_content(
-                            model=ai_model, contents=contents
+                        # Kết nối OpenRouter qua OpenAI SDK bằng base_url
+                        client = openai.OpenAI(
+                            base_url="https://openrouter.ai/api/v1",
+                            api_key=openrouter_key,
                         )
 
-                        ai_reply = response.text
+                        messages = [
+                            {
+                                "role": "system",
+                                "content": "Bạn là trợ lý AI thông minh hỗ trợ vận hành và quản lý khách sạn.",
+                            }
+                        ]
+                        for m in st.session_state["ai_messages"]:
+                            messages.append(
+                                {"role": m["role"], "content": m["content"]}
+                            )
+
+                        response = client.chat.completions.create(
+                            model=ai_model,
+                            messages=messages,
+                        )
+
+                        ai_reply = response.choices[0].message.content
                         status_placeholder.markdown(ai_reply)
                         st.session_state["ai_messages"].append(
                             {"role": "assistant", "content": ai_reply}
@@ -661,7 +669,7 @@ def main():
 
                     except Exception as e:
                         status_placeholder.error(
-                            f"❌ Lỗi kết nối Gemini API: {e}"
+                            f"❌ Lỗi kết nối OpenRouter API: {e}"
                         )
 
     # --- 7. PHÂN QUYỀN NHÂN VIÊN (CHỈ ADMIN) ---
